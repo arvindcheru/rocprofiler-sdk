@@ -1,11 +1,19 @@
 # Anywhere {branch} is used, the branch name will be substituted.
 # These comments will also be removed.
 defaults:
-  numbered: True
+  numbered: false
   maxdepth: 4
 
 root: index
 subtrees:
+  - entries: 
+    - file: what-is-rocprof-sdk
+    - file: buffered_services.md
+    - file: callback_services.md
+    - file: counter_collection_services.md
+    - file: intercept_table.md
+    - file: pc_sampling.md
+    - file: tool_library_overview.md
   - caption: Install
     entries:
     - file: install/installation
