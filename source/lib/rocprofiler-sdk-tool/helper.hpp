@@ -266,13 +266,13 @@ struct rocprofiler_tool_record_counter_t
 
 struct rocprofiler_tool_counter_collection_record_t
 {
-    rocprofiler_dispatch_counting_service_data_t       dispatch_data    = {};
-    std::array<rocprofiler_tool_record_counter_t, 512> records          = {};
-    uint64_t                                           thread_id        = 0;
-    uint64_t                                           arch_vgpr_count  = 0;
-    uint64_t                                           sgpr_count       = 0;
-    uint64_t                                           lds_block_size_v = 0;
-    uint64_t                                           counter_count    = 0;
+    rocprofiler_dispatch_counting_service_data_t        dispatch_data    = {};
+    std::array<rocprofiler_tool_record_counter_t, 4096> records          = {};
+    uint64_t                                            thread_id        = 0;
+    uint64_t                                            arch_vgpr_count  = 0;
+    uint64_t                                            sgpr_count       = 0;
+    uint64_t                                            lds_block_size_v = 0;
+    uint64_t                                            counter_count    = 0;
 
     template <typename ArchiveT>
     void save(ArchiveT& ar) const
