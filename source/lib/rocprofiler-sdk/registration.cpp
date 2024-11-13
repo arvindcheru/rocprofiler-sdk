@@ -631,6 +631,7 @@ finalize()
     std::call_once(_once, []() {
         set_fini_status(-1);
         hsa::async_copy_fini();
+        counters::device_counting_service_finalize();
         hsa::queue_controller_fini();
         thread_trace::finalize();
         page_migration::finalize();
@@ -708,7 +709,7 @@ rocprofiler_set_api_table(const char* name,
     static auto _once = std::once_flag{};
     std::call_once(_once, rocprofiler::registration::initialize);
 
-    // pass to roctx init
+    // pass to ROCTx init
     ROCP_ERROR_IF(num_tables == 0) << "rocprofiler expected " << name
                                    << " library to pass at least one table, not " << num_tables;
     ROCP_ERROR_IF(tables == nullptr) << "rocprofiler expected pointer to array of tables from "
@@ -786,7 +787,7 @@ rocprofiler_set_api_table(const char* name,
         rocprofiler::agent::construct_agent_cache(hsa_api_table);
         rocprofiler::hsa::queue_controller_init(hsa_api_table);
         // Process agent ctx's that were started prior to HSA init
-        rocprofiler::counters::agent_profile_hsa_registration();
+        rocprofiler::counters::device_counting_service_hsa_registration();
 
         rocprofiler::hsa::async_copy_init(hsa_api_table, lib_instance);
         rocprofiler::code_object::initialize(hsa_api_table);
@@ -813,7 +814,7 @@ rocprofiler_set_api_table(const char* name,
     }
     else if(std::string_view{name} == "roctx")
     {
-        // pass to roctx init
+        // pass to ROCTx init
         ROCP_FATAL_IF(num_tables < 3)
             << "rocprofiler expected ROCTX library to pass 3 API tables, not " << num_tables;
         ROCP_ERROR_IF(num_tables > 3)

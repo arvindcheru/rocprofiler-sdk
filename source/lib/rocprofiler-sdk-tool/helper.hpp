@@ -71,14 +71,9 @@
         {                                                                                          \
             std::string status_msg =                                                               \
                 rocprofiler_get_status_string(ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__));        \
-            std::cerr << "[" #result "][" << __FILE__ << ":" << __LINE__ << "] " << msg            \
-                      << " failed with error code " << ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) \
-                      << ": " << status_msg << "\n"                                                \
-                      << std::flush;                                                               \
-            std::stringstream errmsg{};                                                            \
-            errmsg << "[" #result "][" << __FILE__ << ":" << __LINE__ << "] " << msg " failure ("  \
-                   << status_msg << ")";                                                           \
-            throw std::runtime_error(errmsg.str());                                                \
+            ROCP_FATAL << " :: [" << __FILE__ << ":" << __LINE__ << "]\n\t" << #result << "\n\n"   \
+                       << msg << " failed with error code "                                        \
+                       << ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) << ": " << status_msg;       \
         }                                                                                          \
     }
 
@@ -271,7 +266,7 @@ struct rocprofiler_tool_record_counter_t
 
 struct rocprofiler_tool_counter_collection_record_t
 {
-    rocprofiler_profile_counting_dispatch_data_t       dispatch_data    = {};
+    rocprofiler_dispatch_counting_service_data_t       dispatch_data    = {};
     std::array<rocprofiler_tool_record_counter_t, 512> records          = {};
     uint64_t                                           thread_id        = 0;
     uint64_t                                           arch_vgpr_count  = 0;

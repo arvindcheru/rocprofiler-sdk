@@ -266,7 +266,7 @@ is_targeted_kernel(uint64_t _kern_id)
 auto&
 get_client_ctx()
 {
-    static rocprofiler_context_id_t context_id;
+    static rocprofiler_context_id_t context_id{0};
     return context_id;
 }
 
@@ -889,7 +889,7 @@ get_tool_agent(rocprofiler_agent_id_t id, const tool_agent_vec_t& data)
 
 // this function creates a rocprofiler profile config on the first entry
 auto
-get_agent_profile(rocprofiler_agent_id_t agent_id)
+get_device_counting_service(rocprofiler_agent_id_t agent_id)
 {
     static auto       data                    = common::Synchronized<agent_counter_map_t>{};
     static const auto gpu_agents              = get_gpu_agents();
@@ -980,7 +980,7 @@ get_agent_profile(rocprofiler_agent_id_t agent_id)
 }
 
 void
-dispatch_callback(rocprofiler_profile_counting_dispatch_data_t dispatch_data,
+dispatch_callback(rocprofiler_dispatch_counting_service_data_t dispatch_data,
                   rocprofiler_profile_config_id_t*             config,
                   rocprofiler_user_data_t*                     user_data,
                   void* /*callback_data_args*/)
@@ -1004,7 +1004,7 @@ dispatch_callback(rocprofiler_profile_counting_dispatch_data_t dispatch_data,
     {
         return;
     }
-    else if(auto profile = get_agent_profile(agent_id))
+    else if(auto profile = get_device_counting_service(agent_id))
     {
         *config          = *profile;
         user_data->value = common::get_tid();
@@ -1028,7 +1028,7 @@ get_counter_info_name(uint64_t record_id)
 }
 
 void
-counter_record_callback(rocprofiler_profile_counting_dispatch_data_t dispatch_data,
+counter_record_callback(rocprofiler_dispatch_counting_service_data_t dispatch_data,
                         rocprofiler_record_counter_t*                record_data,
                         size_t                                       record_count,
                         rocprofiler_user_data_t                      user_data,
@@ -1181,10 +1181,9 @@ list_metrics_iterate_agents(rocprofiler_agent_version_t,
                 return ROCPROFILER_STATUS_SUCCESS;
             },
             reinterpret_cast<void*>(&node_id));
-        if(status != ROCPROFILER_STATUS_SUCCESS)
-        {
-            ROCP_ERROR << "Failed to iterate counters for agent " << node_id;
-        }
+
+        ROCP_ERROR_IF(status != ROCPROFILER_STATUS_SUCCESS)
+            << "Failed to iterate counters for agent " << node_id << " (" << agent->name << ")";
     }
     return ROCPROFILER_STATUS_SUCCESS;
 }
@@ -1271,7 +1270,7 @@ tool_init(rocprofiler_client_finalize_t fini_func, void* tool_data)
 
     ROCPROFILER_CALL(rocprofiler_create_context(&get_client_ctx()), "create context failed");
 
-    auto code_obj_ctx = rocprofiler_context_id_t{};
+    auto code_obj_ctx = rocprofiler_context_id_t{0};
     ROCPROFILER_CALL(rocprofiler_create_context(&code_obj_ctx), "failed to create context");
 
     ROCPROFILER_CALL(
@@ -1295,7 +1294,7 @@ tool_init(rocprofiler_client_finalize_t fini_func, void* tool_data)
                              nullptr),
                          "callback tracing service failed to configure");
 
-        auto pause_resume_ctx = rocprofiler_context_id_t{};
+        auto pause_resume_ctx = rocprofiler_context_id_t{0};
         ROCPROFILER_CALL(rocprofiler_create_context(&pause_resume_ctx), "failed to create context");
 
         ROCPROFILER_CALL(rocprofiler_configure_callback_tracing_service(
@@ -1459,14 +1458,14 @@ tool_init(rocprofiler_client_finalize_t fini_func, void* tool_data)
     if(tool::get_config().counter_collection)
     {
         ROCPROFILER_CALL(
-            rocprofiler_configure_callback_dispatch_profile_counting_service(
+            rocprofiler_configure_callback_dispatch_counting_service(
                 get_client_ctx(), dispatch_callback, nullptr, counter_record_callback, nullptr),
             "Could not setup counting service");
     }
 
     if(tool::get_config().kernel_rename)
     {
-        auto rename_ctx            = rocprofiler_context_id_t{};
+        auto rename_ctx            = rocprofiler_context_id_t{0};
         auto marker_core_api_kinds = std::array<rocprofiler_tracing_operation_t, 3>{
             ROCPROFILER_MARKER_CORE_API_ID_roctxMarkA,
             ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,

@@ -23,6 +23,7 @@
 #pragma once
 
 #include <rocprofiler-sdk/rocprofiler.h>
+#include <rocprofiler-sdk/cxx/hash.hpp>
 
 #include "lib/rocprofiler-sdk/hsa/profile_serializer.hpp"
 #include "lib/rocprofiler-sdk/hsa/queue.hpp"
@@ -46,8 +47,10 @@ public:
     using queue_iterator_cb_t    = std::function<void(const Queue*)>;
     using callback_iterator_cb_t = std::function<void(ClientID, const agent_callback_tuple_t&)>;
     using queue_map_t            = std::unordered_map<hsa_queue_t*, std::unique_ptr<Queue>>;
+    using agent_cache_map_t      = std::unordered_map<uint32_t, AgentCache>;
 
-    QueueController() = default;
+    QueueController()  = default;
+    ~QueueController() = default;
     // Initializes the QueueInterceptor. This must be delayed until
     // HSA has been inited.
     void init(CoreApiTable& core_table, AmdExtTable& ext_table);
@@ -68,8 +71,9 @@ public:
     const AmdExtTable&  get_ext_table() const { return _ext_table; }
 
     // Gets the list of supported HSA agents that can be Pintercepted
-    const auto& get_supported_agents() const { return _supported_agents; }
-    auto&       get_supported_agents() { return _supported_agents; }
+    const agent_cache_map_t& get_supported_agents() const;
+
+    agent_cache_map_t& get_supported_agents();
 
     const Queue* get_queue(const hsa_queue_t&) const;
 
@@ -80,7 +84,7 @@ public:
 
     void iterate_callbacks(const callback_iterator_cb_t&) const;
 
-    common::Synchronized<hsa::profiler_serializer>& serializer() { return _profiler_serializer; }
+    common::Synchronized<hsa::profiler_serializer>& serializer(const Queue*);
 
     /**
      * Disable serialization for QueueController, has no effect if counter collection
@@ -101,15 +105,19 @@ public:
 #endif
 
 private:
-    using client_id_map_t   = std::unordered_map<ClientID, agent_callback_tuple_t>;
-    using agent_cache_map_t = std::unordered_map<uint32_t, AgentCache>;
+    using client_id_map_t  = std::unordered_map<ClientID, agent_callback_tuple_t>;
+    using resource_alloc_t = void(const AgentCache&, const CoreApiTable&, const AmdExtTable&);
 
-    CoreApiTable                                   _core_table       = {};
-    AmdExtTable                                    _ext_table        = {};
-    common::Synchronized<queue_map_t>              _queues           = {};
-    common::Synchronized<client_id_map_t>          _callback_cache   = {};
-    agent_cache_map_t                              _supported_agents = {};
-    common::Synchronized<hsa::profiler_serializer> _profiler_serializer;
+    CoreApiTable                          _core_table         = {};
+    AmdExtTable                           _ext_table          = {};
+    common::Synchronized<queue_map_t>     _queues             = {};
+    common::Synchronized<client_id_map_t> _callback_cache     = {};
+    agent_cache_map_t                     _supported_agents   = {};
+    std::atomic<bool>                     _serialized_enabled = {false};
+    common::Synchronized<
+        std::unordered_map<rocprofiler_agent_id_t,
+                           std::shared_ptr<common::Synchronized<hsa::profiler_serializer>>>>
+        _profiler_serializer;
 };
 
 QueueController*

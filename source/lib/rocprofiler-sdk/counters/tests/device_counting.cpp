@@ -33,7 +33,7 @@
 #include "lib/rocprofiler-sdk/registration.hpp"
 
 #include <rocprofiler-sdk/buffer.h>
-#include <rocprofiler-sdk/dispatch_profile.h>
+#include <rocprofiler-sdk/dispatch_counting_service.h>
 #include <rocprofiler-sdk/fwd.h>
 #include <rocprofiler-sdk/registration.h>
 #include <rocprofiler-sdk/rocprofiler.h>
@@ -241,10 +241,10 @@ submitPacket(hsa_queue_t* queue, const void* packet)
 
 }  // namespace
 
-class agent_profile_test : public ::testing::Test
+class device_counting_service_test : public ::testing::Test
 {
 protected:
-    agent_profile_test() {}
+    device_counting_service_test() {}
 
     static void test_run(rocprofiler_counter_flag_t flags = ROCPROFILER_COUNTER_FLAG_NONE,
                          const std::unordered_set<std::string>& test_metrics = {},
@@ -256,7 +256,7 @@ protected:
         context::push_client(1);
         test_init();
         // rocprofiler_debugger_block();
-        counters::agent_profile_hsa_registration();
+        counters::device_counting_service_hsa_registration();
 
         std::string kernel_name = "null_kernel";
 
@@ -295,7 +295,7 @@ protected:
             aql::set_profiler_active_on_queue(
                 agent.cpu_pool(), agent.get_hsa_agent(), [&](hsa::rocprofiler_packet pkt) {
                     pkt.ext_amd_aql_pm4.completion_signal = completion_signal;
-                    submitPacket(queue, (void*) &pkt);
+                    submitPacket(queue, (const void*) &pkt);
 
                     if(hsa_signal_wait_relaxed(completion_signal,
                                                HSA_SIGNAL_CONDITION_EQ,
@@ -336,14 +336,14 @@ protected:
                 /**
                  * Check profile construction
                  */
-                rocprofiler_profile_config_id_t cfg_id = {};
+                rocprofiler_profile_config_id_t cfg_id = {.handle = 0};
                 rocprofiler_counter_id_t        id     = {.handle = metric.id()};
                 ROCPROFILER_CALL(
                     rocprofiler_create_profile_config(agent.get_rocp_agent()->id, &id, 1, &cfg_id),
                     "Unable to create profile");
 
                 ROCPROFILER_CALL(
-                    rocprofiler_configure_agent_profile_counting_service(
+                    rocprofiler_configure_device_counting_service(
                         ctx,
                         opt_buff_id,
                         agent.get_rocp_agent()->id,
@@ -367,7 +367,7 @@ protected:
                 // construction This is a workaround for the test environment since we create
                 // contexts after AgentCache constructed.
                 agent::get_agent_cache(agent.get_rocp_agent())
-                    ->init_agent_profile_queue(get_api_table(), get_ext_table());
+                    ->init_device_counting_service_queue(get_api_table(), get_ext_table());
 
                 hsa_signal_store_screlease(completion_signal, 1);
                 hsa_signal_store_screlease(found_data, 0);
@@ -402,9 +402,9 @@ protected:
                                         HSA_WAIT_STATE_BLOCKED);
 
                 // Sample the counting service.
-                ROCPROFILER_CALL(rocprofiler_sample_agent_profile_counting_service(
-                                     ctx, {.value = track_metric}, flags),
-                                 "Could not sample");
+                ROCPROFILER_CALL(
+                    rocprofiler_sample_device_counting_service(ctx, {.value = track_metric}, flags),
+                    "Could not sample");
                 ROCPROFILER_CALL(rocprofiler_stop_context(ctx), "Could not stop context");
                 rocprofiler_flush_buffer(opt_buff_id);
 
@@ -425,11 +425,178 @@ protected:
         registration::set_init_status(1);
         context::pop_client(1);
     }
+
+    // Inject AQL Packets directly into a userspace queue. This tests that the packets
+    // we get from AQLProfile work as expected. A failure in this test means that the AQL
+    // packets are likely not valid.
+    static void check_raw_aql_packets(const std::string&         metric_to_test,
+                                      size_t                     iter_count,
+                                      const std::vector<double>& expected_values)
+    {
+        using namespace rocprofiler::counters;
+        using namespace rocprofiler::hsa;
+
+        auto header_pkt = [](hsa_packet_type_t type) {
+            uint16_t header = type << HSA_PACKET_HEADER_TYPE;
+            header |= 1 << HSA_PACKET_HEADER_BARRIER;
+            header |= HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_SCACQUIRE_FENCE_SCOPE;
+            header |= HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_SCRELEASE_FENCE_SCOPE;
+            return header;
+        };
+
+        registration::init_logging();
+        registration::set_init_status(-1);
+        context::push_client(1);
+
+        CHECK_EQ(hsa_init(), HSA_STATUS_SUCCESS);
+        test_init();
+
+        const auto& supported_agents = hsa::get_queue_controller()->get_supported_agents();
+        ASSERT_GT(supported_agents.size(), 0);
+
+        int*                             gpuMem;
+        [[maybe_unused]] hipDeviceProp_t devProp;
+        auto                             status = hipGetDeviceProperties(&devProp, 0);
+        CHECK_EQ(status, HSA_STATUS_SUCCESS);
+        status = hipMalloc((void**) &gpuMem, 1 * sizeof(int));
+        CHECK_EQ(status, HSA_STATUS_SUCCESS);
+
+        bool test_ran = false;
+        CHECK(!supported_agents.empty());
+        for(const auto& [_, gpu_agent] : supported_agents)
+        {
+            test_kernels kernel_loader(gpu_agent);
+            auto         kernel_handle = kernel_loader.load_kernel(gpu_agent, "null_kernel");
+
+            ROCP_ERROR << fmt::format("Running test on agent {:x}",
+                                      gpu_agent.get_hsa_agent().handle);
+
+            const auto* agent_map = rocprofiler::common::get_val(counters::get_ast_map(),
+                                                                 std::string(gpu_agent.name()));
+            CHECK(agent_map);
+            const auto* original_ast = rocprofiler::common::get_val(*agent_map, metric_to_test);
+            CHECK(original_ast);
+            auto                       counter_ast = *original_ast;
+            std::set<counters::Metric> required_counters;
+            counter_ast.get_required_counters(*agent_map, required_counters);
+            std::vector<counters::Metric> req_cnt(required_counters.begin(),
+                                                  required_counters.end());
+            CHECK(!req_cnt.empty());
+            aql::CounterPacketConstruct pkt_constructor(gpu_agent.get_rocp_agent()->id, req_cnt);
+
+            // Construct the queue to test on
+            hsa_queue_t* queue;
+            CHECK_EQ(hsa_queue_create(gpu_agent.get_hsa_agent(),
+                                      1024,
+                                      HSA_QUEUE_TYPE_SINGLE,
+                                      nullptr,
+                                      nullptr,
+                                      UINT32_MAX,
+                                      UINT32_MAX,
+                                      &queue),
+                     HSA_STATUS_SUCCESS);
+
+            auto kern_pkt  = gen_kernel_pkt(kernel_handle);
+            auto inst_pkts = pkt_constructor.construct_packet(get_api_table(), get_ext_table());
+            inst_pkts->packets.start_packet.header = header_pkt(HSA_PACKET_TYPE_VENDOR_SPECIFIC);
+            inst_pkts->packets.start_packet.completion_signal.handle = 0;
+            inst_pkts->packets.stop_packet.header = header_pkt(HSA_PACKET_TYPE_VENDOR_SPECIFIC);
+            inst_pkts->packets.read_packet.completion_signal.handle = 0;
+            inst_pkts->packets.read_packet.header = header_pkt(HSA_PACKET_TYPE_VENDOR_SPECIFIC);
+
+            std::vector<rocprofiler_packet> packets;
+            packets.emplace_back().ext_amd_aql_pm4 = inst_pkts->packets.start_packet;
+            packets.emplace_back()                 = kern_pkt;
+            packets.emplace_back().ext_amd_aql_pm4 = inst_pkts->packets.read_packet;
+            packets.emplace_back().ext_amd_aql_pm4 = inst_pkts->packets.stop_packet;
+
+            // Insert barriers for all packets
+            auto blocked_packets = [&]() {
+                std::vector<rocprofiler_packet> blocked;
+                for(auto& pkt : packets)
+                {
+                    rocprofiler_packet barrier{};
+                    hsa_signal_t       block_signal;
+                    hsa_signal_create(1, 0, nullptr, &block_signal);
+                    pkt.ext_amd_aql_pm4.completion_signal.handle = block_signal.handle;
+                    blocked.push_back(pkt);
+
+                    barrier.barrier_and.header        = header_pkt(HSA_PACKET_TYPE_BARRIER_AND);
+                    barrier.barrier_and.dep_signal[0] = block_signal;
+                    barrier.barrier_and.completion_signal.handle = block_signal.handle;
+                    blocked.push_back(barrier);
+                }
+                return blocked;
+            }();
+
+            CHECK(inst_pkts);
+
+            for(size_t i = 0; i < iter_count; i++)
+            {
+                for(auto& pkt : blocked_packets)
+                {
+                    hsa_signal_store_screlease(pkt.ext_amd_aql_pm4.completion_signal, 1);
+                }
+
+                for(auto& pkt : blocked_packets)
+                {
+                    ::submitPacket(queue, (const void*) &pkt.ext_amd_aql_pm4);
+                }
+                hsa_signal_wait_relaxed(blocked_packets.back().ext_amd_aql_pm4.completion_signal,
+                                        HSA_SIGNAL_CONDITION_EQ,
+                                        -1,
+                                        UINT32_MAX,
+                                        HSA_WAIT_STATE_ACTIVE);
+
+                ROCP_ERROR << "Processing Next...";
+                auto decoded_pkt = counters::EvaluateAST::read_pkt(&pkt_constructor, *inst_pkts);
+                CHECK(!decoded_pkt.empty());
+                ROCP_ERROR << "Decoded Packet:";
+                for(const auto& [id, data_vec] : decoded_pkt)
+                {
+                    ROCP_ERROR << fmt::format("\t[{} = {}]", id, fmt::join(data_vec, ","));
+                }
+
+                std::vector<std::unique_ptr<std::vector<rocprofiler_record_counter_t>>> cache;
+                auto* ret = counter_ast.evaluate(decoded_pkt, cache);
+                CHECK(!ret->empty());
+                ROCP_ERROR << fmt::format(
+                    "Final Decoded Counter Values: {} (iter={})", fmt::join(*ret, ","), i);
+
+                CHECK_EQ(ret->size(), expected_values.size());
+                size_t pos = 0;
+                for(const auto& v : expected_values)
+                {
+                    CHECK_EQ(v, ret->at(pos).counter_value);
+                    pos++;
+                }
+            }
+
+            std::set<uint64_t> signals_deleted;
+            for(auto& pkt : packets)
+            {
+                if(signals_deleted.find(pkt.ext_amd_aql_pm4.completion_signal.handle) ==
+                   signals_deleted.end())
+                {
+                    hsa_signal_destroy(pkt.ext_amd_aql_pm4.completion_signal);
+                    signals_deleted.insert(pkt.ext_amd_aql_pm4.completion_signal.handle);
+                }
+            }
+            test_ran = true;
+        }
+
+        CHECK_EQ(hipFree(gpuMem), hipSuccess);
+
+        CHECK(test_ran);
+
+        registration::set_init_status(1);
+        registration::finalize();
+    }
 };
 
-TEST_F(agent_profile_test, sync_counters) { test_run(); }
-TEST_F(agent_profile_test, async_counters) { test_run(ROCPROFILER_COUNTER_FLAG_ASYNC); }
-TEST_F(agent_profile_test, sync_grbm_verify)
+TEST_F(device_counting_service_test, sync_counters) { test_run(); }
+TEST_F(device_counting_service_test, async_counters) { test_run(ROCPROFILER_COUNTER_FLAG_ASYNC); }
+TEST_F(device_counting_service_test, sync_grbm_verify)
 {
     test_run(ROCPROFILER_COUNTER_FLAG_NONE, {"GRBM_COUNT"}, 50000);
     ROCP_ERROR << global_recs().size();
@@ -445,7 +612,7 @@ TEST_F(agent_profile_test, sync_grbm_verify)
     }
 }
 
-TEST_F(agent_profile_test, sync_gpu_util_verify)
+TEST_F(device_counting_service_test, sync_gpu_util_verify)
 {
     test_run(ROCPROFILER_COUNTER_FLAG_NONE, {"GPU_UTIL"}, 50000);
     ROCP_ERROR << global_recs().size();
@@ -461,7 +628,7 @@ TEST_F(agent_profile_test, sync_gpu_util_verify)
     }
 }
 
-TEST_F(agent_profile_test, sync_sq_waves_verify)
+TEST_F(device_counting_service_test, sync_sq_waves_verify)
 {
     test_run(ROCPROFILER_COUNTER_FLAG_NONE, {"SQ_WAVES_sum"}, 50000);
     ROCP_ERROR << global_recs().size();
@@ -475,4 +642,9 @@ TEST_F(agent_profile_test, sync_sq_waves_verify)
         ROCP_ERROR << fmt::format("Name: {} Counter value: {}", info.name, val.counter_value);
         EXPECT_GT(val.counter_value, 0.0);
     }
+}
+
+TEST_F(device_counting_service_test, raw_sq_waves_verify)
+{
+    check_raw_aql_packets("SQ_WAVES_sum", 1000, {1.0});
 }

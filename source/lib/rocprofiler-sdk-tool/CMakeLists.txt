@@ -41,14 +41,14 @@ target_sources(rocprofiler-sdk-tool PRIVATE ${TOOL_SOURCES} ${TOOL_HEADERS})
 
 target_link_libraries(
     rocprofiler-sdk-tool
-    PRIVATE rocprofiler-sdk::rocprofiler-shared-library
-            rocprofiler-sdk::rocprofiler-headers
-            rocprofiler-sdk::rocprofiler-build-flags
-            rocprofiler-sdk::rocprofiler-memcheck
-            rocprofiler-sdk::rocprofiler-common-library
-            rocprofiler-sdk::rocprofiler-cereal
-            rocprofiler-sdk::rocprofiler-perfetto
-            rocprofiler-sdk::rocprofiler-otf2)
+    PRIVATE rocprofiler-sdk::rocprofiler-sdk-shared-library
+            rocprofiler-sdk::rocprofiler-sdk-headers
+            rocprofiler-sdk::rocprofiler-sdk-build-flags
+            rocprofiler-sdk::rocprofiler-sdk-memcheck
+            rocprofiler-sdk::rocprofiler-sdk-common-library
+            rocprofiler-sdk::rocprofiler-sdk-cereal
+            rocprofiler-sdk::rocprofiler-sdk-perfetto
+            rocprofiler-sdk::rocprofiler-sdk-otf2)
 
 set_target_properties(
     rocprofiler-sdk-tool
@@ -61,21 +61,6 @@ set_target_properties(
 
 install(
     TARGETS rocprofiler-sdk-tool
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/rocprofiler-sdk
-    COMPONENT tools
-    EXPORT rocprofiler-sdk-tool-targets)
-
-add_executable(rocprofv3-trigger-list-metrics)
-target_sources(rocprofv3-trigger-list-metrics PRIVATE rocprofv3_trigger_list_metrics.cpp)
-target_link_libraries(rocprofv3-trigger-list-metrics
-                      PRIVATE rocprofiler-sdk::rocprofiler-hsa-runtime)
-set_target_properties(
-    rocprofv3-trigger-list-metrics
-    PROPERTIES RUNTIME_OUTPUT_DIRECTORY
-               ${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}/rocprofiler-sdk)
-
-install(
-    TARGETS rocprofv3-trigger-list-metrics
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/rocprofiler-sdk
     COMPONENT tools
     EXPORT rocprofiler-sdk-tool-targets)

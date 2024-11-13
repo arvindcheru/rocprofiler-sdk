@@ -13,13 +13,17 @@ target_sources(rocprofiler-sdk-tool-kokkosp PRIVATE ${KOKKOSP_SOURCES} ${KOKKOSP
 target_link_libraries(
     rocprofiler-sdk-tool-kokkosp
     PRIVATE rocprofiler-sdk-roctx::rocprofiler-sdk-roctx-shared-library
-            rocprofiler-sdk::rocprofiler-headers
-            rocprofiler-sdk::rocprofiler-common-library rocprofiler-sdk::rocprofiler-glog)
+            rocprofiler-sdk::rocprofiler-sdk-headers
+            rocprofiler-sdk::rocprofiler-sdk-common-library
+            rocprofiler-sdk::rocprofiler-sdk-glog)
 
 set_target_properties(
     rocprofiler-sdk-tool-kokkosp
     PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                ${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}/rocprofiler-sdk
+               SOVERSION ${PROJECT_VERSION_MAJOR}
+               VERSION ${PROJECT_VERSION}
+               SKIP_BUILD_RPATH OFF
                BUILD_RPATH "\$ORIGIN:\$ORIGIN/.."
                INSTALL_RPATH "\$ORIGIN:\$ORIGIN/..")
 

@@ -34,6 +34,11 @@ def pytest_addoption(parser):
         help="Path to summary markdown file.",
     )
 
+    pd.set_option("display.width", 2000)
+    # increase debug display of pandas dataframes
+    for itr in ["rows", "columns", "colwidth"]:
+        pd.set_option(f"display.max_{itr}", None)
+
 
 @pytest.fixture
 def json_data(request):

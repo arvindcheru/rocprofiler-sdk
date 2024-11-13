@@ -68,6 +68,7 @@ typedef enum  // NOLINT(performance-enum-size)
                                                    ///< into active array failed)
     ROCPROFILER_STATUS_ERROR_CONTEXT_CONFLICT,  ///< Context operation failed due to a conflict with
                                                 ///< another context
+    ROCPROFILER_STATUS_ERROR_CONTEXT_ID_NOT_ZERO,  ///< Context ID is not initialized to zero
     ROCPROFILER_STATUS_ERROR_BUFFER_BUSY,  ///< buffer operation failed because it currently busy
                                            ///< handling another request (e.g. flushing)
     ROCPROFILER_STATUS_ERROR_SERVICE_ALREADY_CONFIGURED,  ///< service has already been configured
@@ -390,13 +391,13 @@ typedef enum
 typedef enum
 {
     ROCPROFILER_COUNTER_RECORD_NONE = 0,
-    ROCPROFILER_COUNTER_RECORD_PROFILE_COUNTING_DISPATCH_HEADER,  ///< ::rocprofiler_profile_counting_dispatch_record_t
+    ROCPROFILER_COUNTER_RECORD_PROFILE_COUNTING_DISPATCH_HEADER,  ///< ::rocprofiler_dispatch_counting_service_record_t
     ROCPROFILER_COUNTER_RECORD_VALUE,
     ROCPROFILER_COUNTER_RECORD_LAST,
 
     /// @var ROCPROFILER_COUNTER_RECORD_KIND_DISPATCH_PROFILE_HEADER
     /// @brief Indicates the payload type is of type
-    /// ::rocprofiler_profile_counting_dispatch_record_t
+    /// ::rocprofiler_dispatch_counting_service_record_t
 } rocprofiler_counter_record_kind_t;
 
 /**
@@ -688,15 +689,16 @@ typedef struct
     double                            counter_value;  ///< counter value
     rocprofiler_dispatch_id_t         dispatch_id;
     rocprofiler_user_data_t           user_data;
+    rocprofiler_agent_id_t            agent_id;
 
     /// @var dispatch_id
     /// @brief A value greater than zero indicates that this counter record is associated with a
     /// specific dispatch.
     ///
     /// This value can be mapped to a dispatch via the `dispatch_info` field (@see
-    /// ::rocprofiler_kernel_dispatch_info_t) of a ::rocprofiler_profile_counting_dispatch_data_t
+    /// ::rocprofiler_kernel_dispatch_info_t) of a ::rocprofiler_dispatch_counting_service_data_t
     /// instance (provided during callback for profile config) or a
-    /// ::rocprofiler_profile_counting_dispatch_record_t records (which will be insert into the
+    /// ::rocprofiler_dispatch_counting_service_record_t records (which will be insert into the
     /// buffer prior to the associated ::rocprofiler_record_counter_t records).
 } rocprofiler_record_counter_t;
 

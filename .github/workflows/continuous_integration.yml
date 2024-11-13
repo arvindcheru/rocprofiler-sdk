@@ -23,7 +23,6 @@ env:
   ROCM_PATH: "/opt/rocm"
   GPU_TARGETS: "gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100 gfx1101 gfx1102"
   PATH: "/usr/bin:$PATH"
-  PC_SAMPLING_TESTS_REGEX: ".*pc-sampling.*"
 
 jobs:
   core-deb:
@@ -67,12 +66,6 @@ jobs:
         cat /opt/rocm/.info/version
         ls -la
 
-    - name: Exclude PC Sampling Tests
-      if: ${{ !contains(matrix.runner, 'mi200') && !contains(matrix.runner, 'mi300') }}
-      shell: bash
-      run: |
-          echo 'EXCLUDED_TESTS=${{ env.PC_SAMPLING_TESTS_REGEX }}' >> $GITHUB_ENV
-
     - name: Enable PC Sampling
       if: ${{ contains(matrix.runner, 'mi200') }}
       shell: bash
@@ -86,7 +79,7 @@ jobs:
         python3 ./source/scripts/run-ci.py -B build
           --name ${{ github.repository }}-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.runner }}-core
           --build-jobs 16
-          --site $(echo $RUNNER_HOSTNAME)-$(/opt/rocm/bin/rocm_agent_enumerator | sed -n '2 p')
+          --site ${RUNNER_HOSTNAME}
           --gpu-targets ${{ env.GPU_TARGETS }}
           --run-attempt ${{ github.run_attempt }}
           --
@@ -133,7 +126,8 @@ jobs:
         export PATH=${PATH}:/usr/local/sbin:/usr/sbin:/sbin
         ls -la
         ls -la ./build
-        for i in $(ls -S ./build/rocprofiler-sdk*.deb); do dpkg -i ${i}; done;
+        dpkg -i ./build/rocprofiler-sdk-roctx_*.deb
+        for i in $(ls -S ./build/rocprofiler-sdk*.deb | egrep -v roctx); do dpkg -i ${i}; done;
 
     - name: Test Installed Packages
       if: ${{ contains(matrix.runner, env.CORE_EXT_RUNNER) }}
@@ -181,6 +175,7 @@ jobs:
       timeout-minutes: 10
       shell: bash
       run: |
+        sudo python3 -m pip install 'perfetto<0.9.0'
         sudo python3 -m pip install -r requirements.txt
 
     - name: List Files
@@ -192,12 +187,6 @@ jobs:
         for i in python3 git cmake ctest gcc g++ gcov; do which-realpath $i; done
         cat /opt/rocm/.info/version
         ls -la
-
-    - name: Exclude PC Sampling Tests
-      if: ${{ !contains(matrix.runner, 'mi200') && !contains(matrix.runner, 'mi300') }}
-      shell: bash
-      run: |
-          echo 'EXCLUDED_TESTS=${{ env.PC_SAMPLING_TESTS_REGEX }}' >> $GITHUB_ENV
 
     - name: Enable PC Sampling
       if: ${{ contains(matrix.runner, 'mi200') }}
@@ -212,7 +201,7 @@ jobs:
         sudo LD_LIBRARY_PATH=./build/lib:$LD_LIBRARY_PATH python3 ./source/scripts/run-ci.py -B build
           --name ${{ github.repository }}-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.runner }}-core
           --build-jobs 16
-          --site $(echo $RUNNER_HOSTNAME)-$(/opt/rocm/bin/rocm_agent_enumerator | sed -n '2 p')
+          --site ${RUNNER_HOSTNAME}
           --gpu-targets ${{ env.GPU_TARGETS }}
           --run-attempt ${{ github.run_attempt }}
           --
@@ -259,7 +248,8 @@ jobs:
         export PATH=${PATH}:/usr/local/sbin:/usr/sbin:/sbin
         ls -la
         ls -la ./build
-        for i in $(ls -S ./build/rocprofiler-sdk*.deb); do dpkg -i ${i}; done;
+        dpkg -i ./build/rocprofiler-sdk-roctx_*.deb
+        for i in $(ls -S ./build/rocprofiler-sdk*.deb | egrep -v roctx); do dpkg -i ${i}; done;
 
     - name: Test Installed Packages
       if: ${{ contains(matrix.runner, env.CORE_EXT_RUNNER) }}
@@ -368,7 +358,7 @@ jobs:
         python3 ./source/scripts/run-ci.py -B build
           --name ${{ github.repository }}-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.runner }}-codecov
           --build-jobs 16
-          --site $(echo $RUNNER_HOSTNAME)-$(/opt/rocm/bin/rocm_agent_enumerator | sed -n '2 p')
+          --site ${RUNNER_HOSTNAME}
           --gpu-targets ${{ env.GPU_TARGETS }}
           --coverage all
           --run-attempt ${{ github.run_attempt }}
@@ -386,7 +376,7 @@ jobs:
         python3 ./source/scripts/run-ci.py -B build
           --name ${{ github.repository }}-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.runner }}-codecov-tests
           --build-jobs 16
-          --site $(echo $RUNNER_HOSTNAME)-$(/opt/rocm/bin/rocm_agent_enumerator | sed -n '2 p')
+          --site ${RUNNER_HOSTNAME}
           --gpu-targets ${{ env.GPU_TARGETS }}
           --coverage tests
           --run-attempt ${{ github.run_attempt }}
@@ -404,7 +394,7 @@ jobs:
         python3 ./source/scripts/run-ci.py -B build
           --name ${{ github.repository }}-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.runner }}-codecov-samples
           --build-jobs 16
-          --site $(echo $RUNNER_HOSTNAME)-$(/opt/rocm/bin/rocm_agent_enumerator | sed -n '2 p')
+          --site ${RUNNER_HOSTNAME}
           --gpu-targets ${{ env.GPU_TARGETS }}
           --coverage samples
           --run-attempt ${{ github.run_attempt }}
@@ -431,7 +421,7 @@ jobs:
         ls -la
 
         for i in "all" "tests" "samples"; do
-            wkhtmltoimage --enable-local-file-access --quality 85 .codecov/${i}.html .codecov/${i}.png
+            wkhtmltoimage --enable-local-file-access --quality 70 .codecov/${i}.html .codecov/${i}.png
         done
         ls -la .codecov
         which -a git
@@ -561,12 +551,6 @@ jobs:
         cat /opt/rocm/.info/version
         ls -la
 
-    - name: Exclude PC Sampling Tests
-      if: ${{ !contains(matrix.runner, 'mi200') && !contains(matrix.runner, 'mi300') }}
-      shell: bash
-      run: |
-          echo 'EXCLUDED_TESTS=${{ env.PC_SAMPLING_TESTS_REGEX }}' >> $GITHUB_ENV
-
     - name: Enable PC Sampling
       if: ${{ contains(matrix.runner, 'mi200') }}
       shell: bash
@@ -580,7 +564,7 @@ jobs:
         python3 ./source/scripts/run-ci.py -B build
           --name ${{ github.repository }}-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.runner }}-${{ matrix.sanitizer }}
           --build-jobs 16
-          --site $(echo $RUNNER_HOSTNAME)-$(/opt/rocm/bin/rocm_agent_enumerator | sed -n '2 p')
+          --site ${RUNNER_HOSTNAME}
           --gpu-targets ${{ env.GPU_TARGETS }}
           --memcheck ${{ matrix.sanitizer }}
           --run-attempt ${{ github.run_attempt }}

@@ -22,6 +22,7 @@
 
 #include "client.hpp"
 
+#include <cstdint>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -63,7 +64,7 @@ namespace
 rocprofiler_context_id_t&
 get_client_ctx()
 {
-    static rocprofiler_context_id_t ctx;
+    static rocprofiler_context_id_t ctx{0};
     return ctx;
 }
 
@@ -74,6 +75,13 @@ get_buffer()
     return buf;
 }
 
+std::unordered_map<uint64_t, std::vector<rocprofiler_record_dimension_info_t>>**
+dimension_cache()
+{
+    static std::unordered_map<uint64_t, std::vector<rocprofiler_record_dimension_info_t>>* cache;
+    return &cache;
+}
+
 /**
  * For a given counter, query the dimensions that it has. Typically you will
  * want to call this function once to get the dimensions and cache them.
@@ -81,6 +89,20 @@ get_buffer()
 std::vector<rocprofiler_record_dimension_info_t>
 counter_dimensions(rocprofiler_counter_id_t counter)
 {
+    if(*dimension_cache() == nullptr) return {};
+
+    if((*dimension_cache())->count(counter.handle) > 0)
+    {
+        return (*dimension_cache())->at(counter.handle);
+    }
+
+    return {};
+}
+
+void
+fill_dimension_cache(rocprofiler_counter_id_t counter)
+{
+    assert(*dimension_cache() != nullptr);
     std::vector<rocprofiler_record_dimension_info_t> dims;
     rocprofiler_available_dimensions_cb_t            cb =
         [](rocprofiler_counter_id_t,
@@ -97,7 +119,7 @@ counter_dimensions(rocprofiler_counter_id_t counter)
         };
     ROCPROFILER_CALL(rocprofiler_iterate_counter_dimensions(counter, cb, &dims),
                      "Could not iterate counter dimensions");
-    return dims;
+    (*dimension_cache())->emplace(counter.handle, dims);
 }
 
 /**
@@ -126,7 +148,7 @@ buffered_callback(rocprofiler_context_id_t,
         {
             // Print the returned counter data.
             auto* record =
-                static_cast<rocprofiler_profile_counting_dispatch_record_t*>(header->payload);
+                static_cast<rocprofiler_dispatch_counting_service_record_t*>(header->payload);
             ss << "[Dispatch_Id: " << record->dispatch_info.dispatch_id
                << " Kernel_ID: " << record->dispatch_info.kernel_id
                << " Corr_Id: " << record->correlation_id.internal << ")]\n";
@@ -179,7 +201,7 @@ get_profile_cache()
  * to collect the counter SQ_WAVES for all kernel dispatch packets.
  */
 void
-dispatch_callback(rocprofiler_profile_counting_dispatch_data_t dispatch_data,
+dispatch_callback(rocprofiler_dispatch_counting_service_data_t dispatch_data,
                   rocprofiler_profile_config_id_t*             config,
                   rocprofiler_user_data_t* /*user_data*/,
                   void* /*callback_data_args*/)
@@ -251,11 +273,12 @@ build_profile_for_agent(rocprofiler_agent_id_t       agent,
         {
             std::clog << "Counter: " << counter.handle << " " << version.name << "\n";
             collect_counters.push_back(counter);
+            fill_dimension_cache(counter);
         }
     }
 
     // Create and return the profile
-    rocprofiler_profile_config_id_t profile;
+    rocprofiler_profile_config_id_t profile = {.handle = 0};
     ROCPROFILER_CALL(rocprofiler_create_profile_config(
                          agent, collect_counters.data(), collect_counters.size(), &profile),
                      "Could not construct profile cfg");
@@ -352,7 +375,7 @@ tool_init(rocprofiler_client_finalize_t, void* user_data)
     // counters to collect by returning a profile config id. In this example, we create the profile
     // configs above and store them in the map get_profile_cache() so we can look them up at
     // dispatch.
-    ROCPROFILER_CALL(rocprofiler_configure_buffered_dispatch_profile_counting_service(
+    ROCPROFILER_CALL(rocprofiler_configure_buffered_dispatch_counting_service(
                          get_client_ctx(), get_buffer(), dispatch_callback, nullptr),
                      "Could not setup buffered service");
 
@@ -375,6 +398,10 @@ tool_fini(void* user_data)
     auto* output_stream = static_cast<std::ostream*>(user_data);
     *output_stream << std::flush;
     if(output_stream != &std::cout && output_stream != &std::cerr) delete output_stream;
+
+    auto* tmp_ptr      = *dimension_cache();
+    *dimension_cache() = nullptr;
+    delete tmp_ptr;
 }
 }  // namespace
 
@@ -415,6 +442,9 @@ rocprofiler_configure(uint32_t                 version,
                                             &tool_init,
                                             &tool_fini,
                                             static_cast<void*>(output_stream)};
+
+    *dimension_cache() =
+        new std::unordered_map<uint64_t, std::vector<rocprofiler_record_dimension_info_t>>();
 
     // return pointer to configure data
     return &cfg;

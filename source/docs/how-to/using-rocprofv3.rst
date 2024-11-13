@@ -1,6 +1,6 @@
 .. meta::
   :description: Documentation of the installation, configuration, use of the ROCprofiler-SDK, and rocprofv3 command-line tool
-  :keywords: ROCprofiler-SDK tool, ROCprofiler-SDK library, rocprofv3, ROCm, API, reference
+  :keywords: ROCprofiler-SDK tool, ROCprofiler-SDK library, rocprofv3, rocprofv3 tool usage, Using rocprofv3, ROCprofiler-SDK command line tool, ROCprofiler-SDK CLI
 
 .. _using-rocprofv3:
 
@@ -137,24 +137,24 @@ Here is the sample of commonly used ``rocprofv3`` command-line options. Some opt
   * - ``--preload``
     - Libraries to prepend to LD_PRELOAD (usually for sanitizers)
     - Extension
-  
+
   * - ``--perfetto-backend {inprocess,system}``
     - Perfetto data collection backend. 'system' mode requires starting traced and perfetto daemons
     - Extension
-  
+
   * - ``--perfetto-buffer-size KB``
     - Size of buffer for perfetto output in KB. default: 1 GB
     - Extension
-  
+
   * - ``--perfetto-buffer-fill-policy {discard,ring_buffer}``
     - Policy for handling new records when perfetto has reached the buffer limit
     - Extension
-  
+
   * - ``--perfetto-shmem-size-hint KB``
     - Perfetto shared memory size hint in KB. default: 64 KB
     - Extension
 
-You can also see all the ``rocprofv3`` options using:
+To see exhaustive list of ``rocprofv3`` options, run:
 
 .. code-block:: bash
 
@@ -247,7 +247,7 @@ Marker trace
 
 In certain situations, such as debugging performance issues in large-scale GPU programs, API-level tracing might be too fine-grained to provide a big picture of the program execution. In such cases, it is helpful to define specific tasks to be traced.
 
-To specify the tasks for tracing, enclose the respective source code with the API calls provided by the ``ROCTX`` library. This process is also known as instrumentation. As the scope of code for instrumentation is defined using the enclosing API calls, it is called a range. A range is a programmer-defined task that has a well-defined start and end code scope. You can also refine the scope specified within a range using further nested ranges. ``rocprofv3`` also reports the timelines for these nested ranges.
+To specify the tasks for tracing, enclose the respective source code with the API calls provided by the ``ROCTx`` library. This process is also known as instrumentation. As the scope of code for instrumentation is defined using the enclosing API calls, it is called a range. A range is a programmer-defined task that has a well-defined start and end code scope. You can also refine the scope specified within a range using further nested ranges. ``rocprofv3`` also reports the timelines for these nested ranges.
 
 Here is a list of useful APIs for code instrumentation.
 
@@ -257,9 +257,17 @@ Here is a list of useful APIs for code instrumentation.
 - ``roctxRangePop``: Stops the current nested range.
 - ``roctxRangeStop``: Stops the given range.
 
-See how to use ``rocTX`` APIs in the MatrixTranspose application below:
+.. note::
+  To use ``rocprofv3`` for marker tracing, including and linking to old ROCTx works but it is recommended to switch to new ROCTx because
+  it has been extended with new APIs.
+  To use new ROCTx, please include header ``"rocprofiler-sdk-roctx/roctx.h"`` and link your application with ``librocprofiler-sdk-roctx.so``.
+  Above list of APIs is not exhaustive. See public header file ``"rocprofiler-sdk-roctx/roctx.h"`` for full list.
+
+See how to use ``ROCTx`` APIs in the MatrixTranspose application below:
 
 .. code-block:: bash
+
+    #include <rocprofiler-sdk-roctx/roctx.h>
 
     roctxMark("before hipLaunchKernel");
     int rangeId = roctxRangeStart("hipLaunchKernel range");
@@ -366,7 +374,7 @@ memory operations (copies and scratch).
 
     rocprofv3 –-runtime-trace -- < app_relative_path >
 
-Running the above command generates ``hip_api_trace.csv``, ``kernel_trace.csv``, ``memory_copy_trace.csv``, ``scratch_memory_trace.csv``,and ``marker_api_trace.csv`` (if ``rocTX`` APIs are specified in the application) files prefixed with the process ID.
+Running the above command generates ``hip_api_trace.csv``, ``kernel_trace.csv``, ``memory_copy_trace.csv``, ``scratch_memory_trace.csv``,and ``marker_api_trace.csv`` (if ``ROCTx`` APIs are specified in the application) files prefixed with the process ID.
 
 System trace
 ++++++++++++++
@@ -377,7 +385,7 @@ This is an all-inclusive option to collect all the above-mentioned traces.
 
     rocprofv3 –-sys-trace -- < app_relative_path >
 
-Running the above command generates ``hip_api_trace.csv``, ``hsa_api_trace.csv``, ``kernel_trace.csv``, ``memory_copy_trace.csv``, and ``marker_api_trace.csv`` (if ``rocTX`` APIs are specified in the application) files prefixed with the process ID.
+Running the above command generates ``hip_api_trace.csv``, ``hsa_api_trace.csv``, ``kernel_trace.csv``, ``memory_copy_trace.csv``, and ``marker_api_trace.csv`` (if ``ROCTx`` APIs are specified in the application) files prefixed with the process ID.
 
 Scratch memory trace
 ++++++++++++++++++++++
@@ -534,6 +542,21 @@ Properties
         - WRITE_SIZE
 
 
+Command-line
++++++++++++++
+
+Desired counters can now be collected as ``command-line`` option as well.
+
+To supply the counters via ``command-line`` options, use:
+
+.. code-block:: shell
+
+   rocprofv3 --pmc SQ_WAVES GRBM_COUNT GRBM_GUI_ACTIVE -- <app_relative_path>
+
+.. note::
+   1. Please note that more than 1 counters should be separated by a space or a comma.
+   2. Job will fail if entire set of counters cannot be collected in single pass
+
 Kernel profiling output
 +++++++++++++++++++++++++
 
@@ -557,12 +580,12 @@ Here are the contents of ``counter_collection.csv`` file:
 
 .. csv-table:: Counter collection
    :file: /data/counter_collection.csv
-   :widths: 10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10
+   :widths: 10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10
    :header-rows: 1
 
 For the description of the fields in the output file, see :ref:`output-file-fields`.
 
-Kernel Filtering
+Kernel filtering
 +++++++++++++++++
 
 rocprofv3 supports kernel filtering in case of profiling. A kernel filter is a set of a regex string (to include the kernels matching this filter), a regex string (to exclude the kernels matching this filter),
@@ -616,11 +639,11 @@ To collect counters for the kernels matching the filters specified in the preced
     rocprofv3 -i input.yml -- <app_relative_path>
 
     $ cat pass_1/312_counter_collection.csv
-    "Correlation_Id","Dispatch_Id","Agent_Id","Queue_Id","Process_Id","Thread_Id","Grid_Size","Kernel_Name","Workgroup_Size","LDS_Block_Size","Scratch_Size","VGPR_Count","SGPR_Count","Counter_Name","Counter_Value"
-    4,4,1,1,36499,36499,1048576,"divide_kernel(float*, float const*, float const*, int, int)",64,0,0,12,16,"SQ_WAVES",16384
-    8,8,1,2,36499,36499,1048576,"divide_kernel(float*, float const*, float const*, int, int)",64,0,0,12,16,"SQ_WAVES",16384
-    12,12,1,3,36499,36499,1048576,"divide_kernel(float*, float const*, float const*, int, int)",64,0,0,12,16,"SQ_WAVES",16384
-    16,16,1,4,36499,36499,1048576,"divide_kernel(float*, float const*, float const*, int, int)",64,0,0,12,16,"SQ_WAVES",16384
+    "Correlation_Id","Dispatch_Id","Agent_Id","Queue_Id","Process_Id","Thread_Id","Grid_Size","Kernel_Name","Workgroup_Size","LDS_Block_Size","Scratch_Size","VGPR_Count","SGPR_Count","Counter_Name","Counter_Value","Start_Timestamp","End_Timestamp"
+    4,4,1,1,36499,36499,1048576,"divide_kernel(float*, float const*, float const*, int, int)",64,0,0,12,16,"SQ_WAVES",16384,2228955885095594,2228955885119754
+    8,8,1,2,36499,36499,1048576,"divide_kernel(float*, float const*, float const*, int, int)",64,0,0,12,16,"SQ_WAVES",16384,2228955885095594,2228955885119754
+    12,12,1,3,36499,36499,1048576,"divide_kernel(float*, float const*, float const*, int, int)",64,0,0,12,16,"SQ_WAVES",16384,2228955892986914,2228955893006114
+    16,16,1,4,36499,36499,1048576,"divide_kernel(float*, float const*, float const*, int, int)",64,0,0,12,16,"SQ_WAVES",16384,2228955892986914,2228955893006114
 
 .. _output-file-fields:
 
@@ -745,7 +768,7 @@ Properties
             - **`simd_per_cu`** `(integer)`: SIMDs per CU.
             - **`max_slots_scratch_cu`** `(integer)`: Maximum slots for scratch CU.
             - **`gfx_target_version`** `(integer)`: GFX target version.
-            - **`vendor_id`** `(integer)`: Vendor ID. 
+            - **`vendor_id`** `(integer)`: Vendor ID.
             - **`device_id`** `(integer)`: Device ID.
             - **`location_id`** `(integer)`: Location ID.
             - **`domain`** `(integer)`: Domain identifier.

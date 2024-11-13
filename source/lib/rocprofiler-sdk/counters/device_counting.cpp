@@ -20,12 +20,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include "lib/rocprofiler-sdk/counters/agent_profiling.hpp"
+#include "lib/rocprofiler-sdk/counters/device_counting.hpp"
 #include "lib/common/logging.hpp"
 #include "lib/rocprofiler-sdk/buffer.hpp"
 #include "lib/rocprofiler-sdk/context/context.hpp"
 #include "lib/rocprofiler-sdk/counters/controller.hpp"
 #include "lib/rocprofiler-sdk/counters/core.hpp"
+#include "lib/rocprofiler-sdk/counters/id_decode.hpp"
 #include "lib/rocprofiler-sdk/hsa/agent_cache.hpp"
 #include "lib/rocprofiler-sdk/hsa/hsa.hpp"
 #include "lib/rocprofiler-sdk/hsa/queue_controller.hpp"
@@ -138,6 +139,13 @@ agent_async_handler(hsa_signal_value_t /*signal_v*/, void* data)
         return false;
     }
 
+    if(decoded_pkt.empty())
+    {
+        // reset the signal to allow another sample to start
+        hsa::get_core_table()->hsa_signal_store_relaxed_fn(callback_data.completion, 1);
+        return true;
+    }
+
     // Write out the AQL data to the buffer
     for(auto& ast : prof_config->asts)
     {
@@ -147,6 +155,7 @@ agent_async_handler(hsa_signal_value_t /*signal_v*/, void* data)
         for(auto& val : *ret)
         {
             val.user_data = callback_data.user_data;
+            val.agent_id  = prof_config->agent->id;
             buf->emplace(
                 ROCPROFILER_BUFFER_CATEGORY_COUNTERS, ROCPROFILER_COUNTER_RECORD_VALUE, val);
         }
@@ -249,13 +258,13 @@ read_agent_ctx(const context::context*    ctx,
                rocprofiler_counter_flag_t flags)
 {
     rocprofiler_status_t status = ROCPROFILER_STATUS_SUCCESS;
-    if(!ctx->agent_counter_collection)
+    if(!ctx->device_counter_collection)
     {
         ROCP_ERROR << fmt::format("Context {} has no agent counter collection", ctx->context_idx);
         return ROCPROFILER_STATUS_ERROR_CONTEXT_INVALID;
     }
 
-    auto& agent_ctx = *ctx->agent_counter_collection;
+    auto& agent_ctx = *ctx->device_counter_collection;
 
     // If we have not initiualized HSA yet, nothing to read, return;
     if(hsa_inited().load() == false)
@@ -264,15 +273,16 @@ read_agent_ctx(const context::context*    ctx,
     }
 
     // Set the state to LOCKED to prevent other calls to start/stop/read.
-    auto expected = rocprofiler::context::agent_counter_collection_service::state::ENABLED;
+    auto expected = rocprofiler::context::device_counting_service::state::ENABLED;
     if(!agent_ctx.status.compare_exchange_strong(
-           expected, rocprofiler::context::agent_counter_collection_service::state::LOCKED))
+           expected, rocprofiler::context::device_counting_service::state::LOCKED))
     {
         return ROCPROFILER_STATUS_ERROR_CONTEXT_ERROR;
     }
 
     for(auto& callback_data : agent_ctx.agent_data)
     {
+        if(!callback_data.profile || !callback_data.set_profile) continue;
         const auto* agent = agent::get_agent_cache(callback_data.profile->agent);
 
         // If the agent no longer exists or we don't have a profile queue, reading is an error
@@ -337,8 +347,7 @@ read_agent_ctx(const context::context*    ctx,
         }
     }
 
-    agent_ctx.status.exchange(
-        rocprofiler::context::agent_counter_collection_service::state::ENABLED);
+    agent_ctx.status.exchange(rocprofiler::context::device_counting_service::state::ENABLED);
     return status;
 }
 
@@ -357,12 +366,12 @@ rocprofiler_status_t
 start_agent_ctx(const context::context* ctx)
 {
     auto status = ROCPROFILER_STATUS_SUCCESS;
-    if(!ctx->agent_counter_collection)
+    if(!ctx->device_counter_collection)
     {
         return status;
     }
 
-    auto& agent_ctx = *ctx->agent_counter_collection;
+    auto& agent_ctx = *ctx->device_counter_collection;
 
     if(hsa_inited().load() == false)
     {
@@ -370,9 +379,9 @@ start_agent_ctx(const context::context* ctx)
     }
 
     // Set the state to LOCKED to prevent other calls to start/stop/read.
-    auto expected = rocprofiler::context::agent_counter_collection_service::state::DISABLED;
+    auto expected = rocprofiler::context::device_counting_service::state::DISABLED;
     if(!agent_ctx.status.compare_exchange_strong(
-           expected, rocprofiler::context::agent_counter_collection_service::state::LOCKED))
+           expected, rocprofiler::context::device_counting_service::state::LOCKED))
     {
         return ROCPROFILER_STATUS_ERROR_SERVICE_ALREADY_CONFIGURED;
     }
@@ -396,6 +405,8 @@ start_agent_ctx(const context::context* ctx)
             break;
         }
 
+        callback_data.set_profile = false;
+
         // Ask the tool what profile we should use for this agent
         callback_data.cb(
             {.handle = ctx->context_idx},
@@ -408,19 +419,19 @@ start_agent_ctx(const context::context* ctx)
                 auto config = rocprofiler::counters::get_profile_config(config_id);
                 if(!config) return ROCPROFILER_STATUS_ERROR_PROFILE_NOT_FOUND;
 
-                if(!cb_ctx->agent_counter_collection)
+                if(!cb_ctx->device_counter_collection)
                 {
                     return ROCPROFILER_STATUS_ERROR_CONTEXT_INVALID;
                 }
 
                 // Only allow profiles to be set in the locked state
-                if(cb_ctx->agent_counter_collection->status.load() !=
-                   rocprofiler::context::agent_counter_collection_service::state::LOCKED)
+                if(cb_ctx->device_counter_collection->status.load() !=
+                   rocprofiler::context::device_counting_service::state::LOCKED)
                 {
                     return ROCPROFILER_STATUS_ERROR_CONFIGURATION_LOCKED;
                 }
 
-                for(auto& agent_data : cb_ctx->agent_counter_collection->agent_data)
+                for(auto& agent_data : cb_ctx->device_counter_collection->agent_data)
                 {
                     // Find the agent that this profile is for and set it.
                     if(agent_data.agent_id.handle == config->agent->id.handle)
@@ -449,7 +460,6 @@ start_agent_ctx(const context::context* ctx)
             continue;
         }
 
-        callback_data.set_profile = false;
         CHECK(callback_data.profile);
 
         // Generate necessary structures in the context (packet gen, etc) to process
@@ -474,8 +484,7 @@ start_agent_ctx(const context::context* ctx)
                                                           HSA_WAIT_STATE_ACTIVE);
     }
 
-    agent_ctx.status.exchange(
-        rocprofiler::context::agent_counter_collection_service::state::ENABLED);
+    agent_ctx.status.exchange(rocprofiler::context::device_counting_service::state::ENABLED);
     return status;
 }
 
@@ -490,21 +499,21 @@ rocprofiler_status_t
 stop_agent_ctx(const context::context* ctx)
 {
     auto status = ROCPROFILER_STATUS_SUCCESS;
-    if(!ctx->agent_counter_collection)
+    if(!ctx->device_counter_collection)
     {
         return status;
     }
 
-    auto& agent_ctx = *ctx->agent_counter_collection;
+    auto& agent_ctx = *ctx->device_counter_collection;
 
     if(hsa_inited().load() == false)
     {
         return ROCPROFILER_STATUS_SUCCESS;
     }
 
-    auto expected = rocprofiler::context::agent_counter_collection_service::state::ENABLED;
+    auto expected = rocprofiler::context::device_counting_service::state::ENABLED;
     if(!agent_ctx.status.compare_exchange_strong(
-           expected, rocprofiler::context::agent_counter_collection_service::state::LOCKED))
+           expected, rocprofiler::context::device_counting_service::state::LOCKED))
     {
         // Status is already stopped or being enabled elsewhere.
         return ROCPROFILER_STATUS_SUCCESS;
@@ -531,21 +540,48 @@ stop_agent_ctx(const context::context* ctx)
                                                           HSA_WAIT_STATE_ACTIVE);
     }
 
-    agent_ctx.status.exchange(
-        rocprofiler::context::agent_counter_collection_service::state::DISABLED);
+    agent_ctx.status.exchange(rocprofiler::context::device_counting_service::state::DISABLED);
     return status;
+}
+
+// Stop all contexts and prevent any further requests to start/stop/read.
+// Waits until any current operation is complete before exiting.
+rocprofiler_status_t
+device_counting_service_finalize()
+{
+    for(auto& ctx : context::get_registered_contexts())
+    {
+        std::vector<rocprofiler::context::device_counting_service::state> expected = {
+            rocprofiler::context::device_counting_service::state::DISABLED,
+            rocprofiler::context::device_counting_service::state::ENABLED,
+            rocprofiler::context::device_counting_service::state::EXIT};
+        if(!ctx->device_counter_collection) continue;
+        while(!ctx->device_counter_collection->status.compare_exchange_strong(
+                  expected[0], rocprofiler::context::device_counting_service::state::EXIT) &&
+              !ctx->device_counter_collection->status.compare_exchange_strong(
+                  expected[1], rocprofiler::context::device_counting_service::state::EXIT) &&
+              !ctx->device_counter_collection->status.compare_exchange_strong(
+                  expected[2], rocprofiler::context::device_counting_service::state::EXIT))
+        {
+            // Note: Compare Exchange can modify expected even if the exchange fails
+            expected = {rocprofiler::context::device_counting_service::state::DISABLED,
+                        rocprofiler::context::device_counting_service::state::ENABLED,
+                        rocprofiler::context::device_counting_service::state::EXIT};
+        };
+    }
+    return ROCPROFILER_STATUS_SUCCESS;
 }
 
 // If we have ctx's that were started before HSA was initialized, we need to
 // actually start those contexts now that we have an HSA instance.
 rocprofiler_status_t
-agent_profile_hsa_registration()
+device_counting_service_hsa_registration()
 {
     hsa_inited().store(true);
 
     for(auto& ctx : context::get_active_contexts())
     {
-        if(!ctx->agent_counter_collection) continue;
+        if(!ctx->device_counter_collection) continue;
         start_agent_ctx(ctx);
     }
 
