@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <functional>
 #include <mutex>
+#include <type_traits>
 
 namespace rocprofiler
 {
@@ -52,7 +53,10 @@ template <typename Tp>
 constexpr size_t
 static_buffer_size()
 {
-    return sizeof(Tp);
+    constexpr auto type_sz = sizeof(Tp);
+    constexpr auto void_sz = sizeof(void*);
+    if constexpr(void_sz > type_sz) return void_sz;
+    return type_sz;
 }
 
 /**
@@ -100,7 +104,7 @@ template <typename Tp, typename ContextT>
 constexpr bool
 static_object<Tp, ContextT>::is_trivial_standard_layout()
 {
-    return (std::is_standard_layout<Tp>::value && std::is_trivial<Tp>::value);
+    return (std::is_standard_layout<Tp>::value && std::is_trivially_destructible<Tp>::value);
 }
 
 template <typename Tp, typename ContextT>

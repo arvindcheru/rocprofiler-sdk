@@ -134,37 +134,42 @@ ring_buffer::as_string() const
 //
 
 void*
-ring_buffer::request(size_t _length, bool _wrap)
+ring_buffer::request(size_t _length, size_t _align, bool _wrap)
 {
     if(m_ptr == nullptr || m_size == 0) return nullptr;
 
-    if(is_full()) return (_wrap) ? retrieve(_length) : nullptr;
+    if(is_full()) return (_wrap) ? retrieve(_length, _align) : nullptr;
+
+    LOG_IF(FATAL, _align == 0) << "alignment must be non-zero";
 
     // if write count is at the tail of buffer, bump to the end of buffer
     size_t _write_count = 0;
     size_t _offset      = 0;
+    size_t _write_pos   = 0;
     do
     {
         // Make sure we don't put in more than there's room for, by writing no
         // more than there is free.
         if(_length > free()) return nullptr;
-
         _offset      = 0;
         _write_count = m_write_count.load(std::memory_order_acquire);
         auto _modulo = m_size - (_write_count % m_size);
         if(_modulo < _length) _offset = _modulo;
+        auto _align_modulo = (_write_count % _align);
+        auto _align_offset = (_align_modulo > 0) ? (_align - _align_modulo) : 0;
+        _write_pos         = _write_count + _align_offset;
     } while(!m_write_count.compare_exchange_strong(
-        _write_count, _write_count + _length + _offset, std::memory_order_seq_cst));
+        _write_count, _write_pos + _length + _offset, std::memory_order_seq_cst));
 
     // pointer in buffer
-    void* _out = write_ptr(_write_count);
+    void* _out = write_ptr(_write_pos);
 
     return _out;
 }
 //
 
 void*
-ring_buffer::retrieve(size_t _length) const
+ring_buffer::retrieve(size_t _length, size_t _align) const
 {
     if(m_ptr == nullptr || m_size == 0) return nullptr;
 
@@ -174,6 +179,7 @@ ring_buffer::retrieve(size_t _length) const
     // if read count is at the tail of buffer, bump to the end of buffer
     size_t _read_count = 0;
     size_t _offset     = 0;
+    size_t _read_pos   = 0;
     do
     {
         if(_length > count()) return nullptr;
@@ -181,11 +187,14 @@ ring_buffer::retrieve(size_t _length) const
         _read_count  = m_read_count.load(std::memory_order_acquire);
         auto _modulo = m_size - (_read_count % m_size);
         if(_modulo < _length) _offset = _modulo;
+        auto _align_modulo = (_read_count % _align);
+        auto _align_offset = (_align_modulo > 0) ? (_align - _align_modulo) : 0;
+        _read_pos          = _read_count + _align_offset;
     } while(!m_read_count.compare_exchange_strong(
-        _read_count, _read_count + _length + _offset, std::memory_order_seq_cst));
+        _read_count, _read_pos + _length + _offset, std::memory_order_seq_cst));
 
     // pointer in buffer
-    void* _out = read_ptr(_read_count);
+    void* _out = read_ptr(_read_pos);
 
     return _out;
 }

@@ -59,9 +59,9 @@ set(${PACKAGE_NAME}_BUILD_TREE
 
 set(PROJECT_BUILD_TREE_TARGETS
     ${SDK_PACKAGE_NAME}::${PACKAGE_NAME}-shared-library
-    ${SDK_PACKAGE_NAME}::${PROJECT_NAME}-headers
-    ${SDK_PACKAGE_NAME}::${PROJECT_NAME}-build-flags
-    ${SDK_PACKAGE_NAME}::${PROJECT_NAME}-stack-protector)
+    ${SDK_PACKAGE_NAME}::${SDK_PACKAGE_NAME}-headers
+    ${SDK_PACKAGE_NAME}::${SDK_PACKAGE_NAME}-build-flags
+    ${SDK_PACKAGE_NAME}::${SDK_PACKAGE_NAME}-stack-protector)
 
 configure_file(
     ${PROJECT_SOURCE_DIR}/cmake/Templates/${PACKAGE_NAME}/build-config.cmake.in
@@ -102,3 +102,8 @@ export(
 set(${PACKAGE_NAME}_DIR
     "${_BUILDTREE_EXPORT_DIR}"
     CACHE PATH "${PACKAGE_NAME} build tree install" FORCE)
+
+install(
+    FILES ${PROJECT_SOURCE_DIR}/LICENSE
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/${PACKAGE_NAME}
+    COMPONENT roctx)

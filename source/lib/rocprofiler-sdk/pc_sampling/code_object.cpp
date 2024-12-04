@@ -26,6 +26,7 @@
 
 #    include "lib/common/container/operators.hpp"
 #    include "lib/common/logging.hpp"
+#    include "lib/common/static_object.hpp"
 #    include "lib/rocprofiler-sdk/code_object/code_object.hpp"
 #    include "lib/rocprofiler-sdk/pc_sampling/service.hpp"
 
@@ -74,14 +75,13 @@ get_destroy_function()
  * @param [in] code_object - loaded/unloaded code object.
  */
 void
-flush_buffers_generate_marker_record(rocprofiler_callback_phase_t                      phase,
-                                     const rocprofiler::code_object::hsa::code_object& code_object)
+flush_pc_sampling_buffers(const rocprofiler::code_object::hsa::code_object& code_object)
 {
     auto agent_id = code_object.rocp_data.rocp_agent;
     if(!is_pc_sample_service_configured(agent_id)) return;
 
-    // The PC sampling service is configured on the agent.
-    // Find the agent's buffer and place marker record.
+    // The PC sampling service is configured on the agent,
+    // so flush its PC sampling buffer
     // TODO: Creating a function that gives the buffer_id based on the agent_id?
     const auto* pcs_service     = get_configured_pc_sampling_service().load();
     const auto* agent_session   = pcs_service->agent_sessions.at(agent_id).get();
@@ -89,46 +89,6 @@ flush_buffers_generate_marker_record(rocprofiler_callback_phase_t               
 
     // flush internal PC sampling buffers
     flush_internal_agent_buffers(agent_buffer_id);
-
-    auto* buff = rocprofiler::buffer::get_buffer(agent_buffer_id);
-
-    // create code object load/unload marker record and emplace it into the SDK's PC SAMPLING
-    // buffer.
-    if(phase == ROCPROFILER_CALLBACK_PHASE_LOAD)
-    {
-        auto marker =
-            common::init_public_api_struct(rocprofiler_pc_sampling_code_object_load_marker_t{});
-        marker.code_object_id = code_object.rocp_data.code_object_id;
-        // emplace marker to the SDK's PC sampling buffer
-        buff->emplace(ROCPROFILER_BUFFER_CATEGORY_PC_SAMPLING,
-                      ROCPROFILER_PC_SAMPLING_RECORD_CODE_OBJECT_LOAD_MARKER,
-                      marker);
-    }
-    else
-    {
-        auto marker =
-            common::init_public_api_struct(rocprofiler_pc_sampling_code_object_unload_marker_t{});
-        marker.code_object_id = code_object.rocp_data.code_object_id;
-        // emplace marker to the SDK's PC sampling buffer
-        buff->emplace(ROCPROFILER_BUFFER_CATEGORY_PC_SAMPLING,
-                      ROCPROFILER_PC_SAMPLING_RECORD_CODE_OBJECT_UNLOAD_MARKER,
-                      marker);
-    }
-
-    // Assuming that the `rocprofiler_pc_sampling_code_object_load_marker_t` and
-    // `rocprofiler_pc_sampling_code_object_unload_marker_t` share the same content,
-    // we could replace the previous if else with the following
-    /*
-        auto marker =
-       common::init_public_api_struct(rocprofiler_pc_sampling_code_object_load_marker_t{});
-        marker.code_object_id = code_object.rocp_data.code_object_id;
-        // emplace marker to the SDK's PC sampling buffer
-        buff->emplace(ROCPROFILER_BUFFER_CATEGORY_PC_SAMPLING,
-                    (phase == ROCPROFILER_CALLBACK_PHASE_LOAD) ?
-                        ROCPROFILER_PC_SAMPLING_RECORD_CODE_OBJECT_LOAD_MARKER
-                        : ROCPROFILER_PC_SAMPLING_RECORD_CODE_OBJECT_UNLOAD_MARKER,
-                    marker);
-    */
 }
 
 hsa_status_t
@@ -141,7 +101,14 @@ executable_freeze(hsa_executable_t executable, const char* options)
     rocprofiler::code_object::iterate_loaded_code_objects(
         [&](const rocprofiler::code_object::hsa::code_object& code_object) {
             if(code_object.hsa_executable == executable)
-                flush_buffers_generate_marker_record(ROCPROFILER_CALLBACK_PHASE_LOAD, code_object);
+            {
+                const auto& code_object_rocp = code_object.rocp_data;
+                CodeobjTableTranslatorSynchronized::Get()->insert(
+                    address_range_t{code_object_rocp.load_base,
+                                    code_object_rocp.load_size,
+                                    code_object_rocp.code_object_id});
+                flush_pc_sampling_buffers(code_object);
+            }
         });
 
     return HSA_STATUS_SUCCESS;
@@ -153,8 +120,14 @@ executable_destroy(hsa_executable_t executable)
     rocprofiler::code_object::iterate_loaded_code_objects(
         [&](const rocprofiler::code_object::hsa::code_object& code_object) {
             if(code_object.hsa_executable == executable)
-                flush_buffers_generate_marker_record(ROCPROFILER_CALLBACK_PHASE_UNLOAD,
-                                                     code_object);
+            {
+                flush_pc_sampling_buffers(code_object);
+                const auto& code_object_rocp = code_object.rocp_data;
+                CodeobjTableTranslatorSynchronized::Get()->remove(
+                    address_range_t{code_object_rocp.load_base,
+                                    code_object_rocp.load_size,
+                                    code_object_rocp.code_object_id});
+            }
         });
 
     // Call underlying function
@@ -183,7 +156,7 @@ finalize()
 {
     rocprofiler::code_object::iterate_loaded_code_objects(
         [&](const rocprofiler::code_object::hsa::code_object& code_object) {
-            flush_buffers_generate_marker_record(ROCPROFILER_CALLBACK_PHASE_UNLOAD, code_object);
+            flush_pc_sampling_buffers(code_object);
         });
 }
 

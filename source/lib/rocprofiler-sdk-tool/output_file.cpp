@@ -22,6 +22,8 @@
 
 #include "output_file.hpp"
 #include "config.hpp"
+
+#include "lib/common/filesystem.hpp"
 #include "lib/common/logging.hpp"
 
 #include <fmt/core.h>
@@ -33,17 +35,16 @@ namespace tool
 {
 namespace fs = common::filesystem;
 
-std::pair<std::ostream*, output_stream_dtor_t>
-get_output_stream(std::string_view fname, std::string_view ext)
+namespace
+{
+const auto stdout_names = std::unordered_set<std::string_view>{"stdout", "STDOUT"};
+const auto stderr_names = std::unordered_set<std::string_view>{"stderr", "STDERR"};
+}  // namespace
+
+std::string
+get_output_filename(std::string_view fname, std::string_view ext)
 {
     auto cfg_output_path = tool::format(tool::get_config().output_path);
-
-    if(cfg_output_path == "stdout" || cfg_output_path == "STDOUT")
-        return {&std::cout, [](auto*&) {}};
-    else if(cfg_output_path == "stderr" || cfg_output_path == "STDERR")
-        return {&std::cout, [](auto*&) {}};
-    else if(cfg_output_path.empty())
-        return {&std::clog, [](auto*&) {}};
 
     // add a period to provided file extension if necessary
     constexpr auto period   = std::string_view{"."};
@@ -55,15 +56,47 @@ get_output_stream(std::string_view fname, std::string_view ext)
     auto output_prefix = tool::format(tool::get_config().output_file);
 
     if(fs::exists(output_path) && !fs::is_directory(fs::status(output_path)))
-        throw std::runtime_error{
-            fmt::format("ROCPROFILER_OUTPUT_PATH ({}) already exists and is not a directory",
-                        output_path.string())};
-    if(!fs::exists(output_path)) fs::create_directories(output_path);
+    {
+        ROCP_FATAL << fmt::format(
+            "ROCPROFILER_OUTPUT_PATH ({}) already exists and is not a directory",
+            output_path.string());
+    }
+    else if(!fs::exists(output_path))
+    {
+        fs::create_directories(output_path);
+    }
 
-    auto output_file =
-        tool::format(output_path / fmt::format("{}_{}{}", output_prefix, fname, _ext));
+    auto _ofname = tool::format(output_path / fmt::format("{}_{}{}", output_prefix, fname, _ext));
 
-    auto* _ofs = new std::ofstream{output_file};
+    // the prefix may contain a subdirectory
+    if(auto _ofname_path = fs::path{_ofname}.parent_path(); !fs::exists(_ofname_path))
+    {
+        fs::create_directories(_ofname_path);
+    }
+    else if(fs::exists(_ofname_path) && !fs::is_directory(fs::status(_ofname_path)))
+    {
+        ROCP_FATAL << fmt::format(
+            "ROCPROFILER_OUTPUT_PATH ({}) already exists and is not a directory",
+            output_path.string());
+    }
+
+    return _ofname;
+}
+
+output_stream_t
+get_output_stream(std::string_view fname, std::string_view ext)
+{
+    auto cfg_output_path = tool::format(tool::get_config().output_path);
+
+    if(stdout_names.count(cfg_output_path) > 0 || stdout_names.count(fname) > 0)
+        return {&std::cout, [](auto*&) {}};
+    else if(stderr_names.count(cfg_output_path) > 0 || stderr_names.count(fname) > 0)
+        return {&std::cout, [](auto*&) {}};
+    else if(cfg_output_path.empty() || fname.empty())
+        return {&std::clog, [](auto*&) {}};
+
+    auto  output_file = get_output_filename(fname, ext);
+    auto* _ofs        = new std::ofstream{output_file};
 
     LOG_IF(FATAL, !_ofs && !*_ofs) << fmt::format("Failed to open {} for output", output_file);
     ROCP_ERROR << "Opened result file: " << output_file;
@@ -77,12 +110,12 @@ get_output_stream(std::string_view fname, std::string_view ext)
 
 output_file::~output_file()
 {
-    if(m_stream)
+    if(m_os.stream)
         ROCP_INFO << "Closing result file: " << m_name;
     else
         ROCP_WARNING << "output_file::~output_file does not have a output stream instance!";
 
-    m_dtor(m_stream);
+    m_os.close();
 }
 }  // namespace tool
 }  // namespace rocprofiler

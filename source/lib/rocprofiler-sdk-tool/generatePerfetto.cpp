@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "generatePerfetto.hpp"
+#include "config.hpp"
 #include "helper.hpp"
 #include "output_file.hpp"
 
@@ -70,7 +71,8 @@ write_perfetto(
     std::deque<rocprofiler_buffer_tracing_kernel_dispatch_record_t>* kernel_dispatch_data,
     std::deque<rocprofiler_buffer_tracing_memory_copy_record_t>*     memory_copy_data,
     std::deque<rocprofiler_buffer_tracing_marker_api_record_t>*      marker_api_data,
-    std::deque<rocprofiler_buffer_tracing_scratch_memory_record_t>* /*scratch_memory_data*/)
+    std::deque<rocprofiler_buffer_tracing_scratch_memory_record_t>* /*scratch_memory_data*/,
+    std::deque<rocprofiler_buffer_tracing_rccl_api_record_t>* rccl_api_data)
 {
     namespace sdk = ::rocprofiler::sdk;
 
@@ -83,20 +85,37 @@ write_perfetto(
     auto cfg             = ::perfetto::TraceConfig{};
 
     // environment settings
-    auto shmem_size_hint = size_t{64};
-    auto buffer_size_kb  = size_t{1024000};
+    auto shmem_size_hint = get_config().perfetto_shmem_size_hint;
+    auto buffer_size_kb  = get_config().perfetto_buffer_size;
 
     auto* buffer_config = cfg.add_buffers();
     buffer_config->set_size_kb(buffer_size_kb);
-    buffer_config->set_fill_policy(
-        ::perfetto::protos::gen::TraceConfig_BufferConfig_FillPolicy_DISCARD);
+
+    if(get_config().perfetto_buffer_fill_policy == "discard" ||
+       get_config().perfetto_buffer_fill_policy.empty())
+        buffer_config->set_fill_policy(
+            ::perfetto::protos::gen::TraceConfig_BufferConfig_FillPolicy_DISCARD);
+    else if(get_config().perfetto_buffer_fill_policy == "ring_buffer")
+        buffer_config->set_fill_policy(
+            ::perfetto::protos::gen::TraceConfig_BufferConfig_FillPolicy_RING_BUFFER);
+    else
+        ROCP_FATAL << "Unsupport perfetto buffer fill policy: '"
+                   << get_config().perfetto_buffer_fill_policy
+                   << "'. Supported: discard, ring_buffer";
 
     auto* ds_cfg = cfg.add_data_sources()->mutable_config();
     ds_cfg->set_name("track_event");  // this MUST be track_event
     ds_cfg->set_track_event_config_raw(track_event_cfg.SerializeAsString());
 
     args.shmem_size_hint_kb = shmem_size_hint;
-    args.backends |= ::perfetto::kInProcessBackend;
+
+    if(get_config().perfetto_backend == "inprocess" || get_config().perfetto_backend.empty())
+        args.backends |= ::perfetto::kInProcessBackend;
+    else if(get_config().perfetto_backend == "system")
+        args.backends |= ::perfetto::kSystemBackend;
+    else
+        ROCP_FATAL << "Unsupport perfetto backend: '" << get_config().perfetto_backend
+                   << "'. Supported: inprocess, system";
 
     ::perfetto::Tracing::Initialize(args);
     ::perfetto::TrackEvent::Register();
@@ -137,12 +156,20 @@ write_perfetto(
             tids.emplace(itr.thread_id);
         for(auto itr : *marker_api_data)
             tids.emplace(itr.thread_id);
+        for(auto itr : *rccl_api_data)
+            tids.emplace(itr.thread_id);
 
         for(auto itr : *memory_copy_data)
+        {
+            tids.emplace(itr.thread_id);
             agent_thread_ids[itr.dst_agent_id].emplace(itr.thread_id);
+        }
 
         for(auto itr : *kernel_dispatch_data)
+        {
+            tids.emplace(itr.thread_id);
             agent_queue_ids[itr.dispatch_info.agent_id].emplace(itr.dispatch_info.queue_id);
+        }
     }
 
     uint64_t nthrn = 0;
@@ -175,13 +202,15 @@ write_perfetto(
         for(auto titr : itr.second)
         {
             auto _namess = std::stringstream{};
-            _namess << "COPY to [" << _agent->logical_node_id << "] THREAD ["
-                    << thread_indexes.at(titr) << "]";
+            _namess << "COPY to AGENT [" << _agent->logical_node_id << "] THREAD ["
+                    << thread_indexes.at(titr) << "] ";
 
             if(_agent->type == ROCPROFILER_AGENT_TYPE_CPU)
-                _namess << " CPU";
+                _namess << "(CPU)";
             else if(_agent->type == ROCPROFILER_AGENT_TYPE_GPU)
-                _namess << " GPU";
+                _namess << "(GPU)";
+            else
+                _namess << "(UNK)";
 
             auto _track = ::perfetto::Track{get_hash_id(_namess.str())};
             auto _desc  = _track.Serialize();
@@ -201,12 +230,15 @@ write_perfetto(
             const auto* _agent = _get_agent(aitr.first);
 
             auto _namess = std::stringstream{};
-            _namess << "COMPUTE [" << _agent->logical_node_id << "] QUEUE [" << nqueue++ << "] ";
+            _namess << "COMPUTE AGENT [" << _agent->logical_node_id << "] QUEUE [" << nqueue++
+                    << "] ";
 
             if(_agent->type == ROCPROFILER_AGENT_TYPE_CPU)
-                _namess << "CPU";
+                _namess << "(CPU)";
             else if(_agent->type == ROCPROFILER_AGENT_TYPE_GPU)
-                _namess << "GPU";
+                _namess << "(GPU)";
+            else
+                _namess << "(UNK)";
 
             auto _track = ::perfetto::Track{get_hash_id(_namess.str())};
             auto _desc  = _track.Serialize();
@@ -249,6 +281,7 @@ write_perfetto(
                               itr.correlation_id.internal);
             TRACE_EVENT_END(
                 sdk::perfetto_category<sdk::category::hsa_api>::name, track, itr.end_timestamp);
+            tracing_session->FlushBlocking();
         }
 
         for(auto itr : *hip_api_data)
@@ -277,6 +310,7 @@ write_perfetto(
                               itr.correlation_id.internal);
             TRACE_EVENT_END(
                 sdk::perfetto_category<sdk::category::hip_api>::name, track, itr.end_timestamp);
+            tracing_session->FlushBlocking();
         }
 
         for(auto itr : *marker_api_data)
@@ -308,6 +342,36 @@ write_perfetto(
                               itr.correlation_id.internal);
             TRACE_EVENT_END(
                 sdk::perfetto_category<sdk::category::marker_api>::name, track, itr.end_timestamp);
+            tracing_session->FlushBlocking();
+        }
+
+        for(auto itr : *rccl_api_data)
+        {
+            auto  name  = buffer_names.at(itr.kind, itr.operation);
+            auto& track = thread_tracks.at(itr.thread_id);
+
+            TRACE_EVENT_BEGIN(sdk::perfetto_category<sdk::category::rccl_api>::name,
+                              ::perfetto::StaticString(name.data()),
+                              track,
+                              itr.start_timestamp,
+                              ::perfetto::Flow::ProcessScoped(itr.correlation_id.internal),
+                              "begin_ns",
+                              itr.start_timestamp,
+                              "end_ns",
+                              itr.end_timestamp,
+                              "delta_ns",
+                              (itr.end_timestamp - itr.start_timestamp),
+                              "tid",
+                              itr.thread_id,
+                              "kind",
+                              itr.kind,
+                              "operation",
+                              itr.operation,
+                              "corr_id",
+                              itr.correlation_id.internal);
+            TRACE_EVENT_END(
+                sdk::perfetto_category<sdk::category::rccl_api>::name, track, itr.end_timestamp);
+            tracing_session->FlushBlocking();
         }
 
         for(auto itr : *memory_copy_data)
@@ -342,6 +406,7 @@ write_perfetto(
                               itr.thread_id);
             TRACE_EVENT_END(
                 sdk::perfetto_category<sdk::category::memory_copy>::name, track, itr.end_timestamp);
+            tracing_session->FlushBlocking();
         }
 
         for(auto itr : *kernel_dispatch_data)
@@ -401,6 +466,7 @@ write_perfetto(
             TRACE_EVENT_END(sdk::perfetto_category<sdk::category::kernel_dispatch>::name,
                             track,
                             itr.end_timestamp);
+            tracing_session->FlushBlocking();
         }
     }
 
@@ -451,9 +517,9 @@ write_perfetto(
             const auto* _agent      = _get_agent(mitr.first);
 
             if(_agent->type == ROCPROFILER_AGENT_TYPE_CPU)
-                _track_name << "COPY BYTES to [" << _agent->logical_node_id << "] CPU";
+                _track_name << "COPY BYTES to AGENT [" << _agent->logical_node_id << "] (CPU)";
             else if(_agent->type == ROCPROFILER_AGENT_TYPE_GPU)
-                _track_name << "COPY BYTES to [" << _agent->logical_node_id << "] GPU";
+                _track_name << "COPY BYTES to AGENT [" << _agent->logical_node_id << "] (GPU)";
 
             constexpr auto _unit = ::perfetto::CounterTrack::Unit::UNIT_SIZE_BYTES;
             auto&          _name = mem_cpy_cnt_names.emplace_back(_track_name.str());
@@ -472,6 +538,7 @@ write_perfetto(
                               mem_cpy_tracks.at(mitr.first),
                               itr.first,
                               itr.second / bytes_multiplier);
+                tracing_session->FlushBlocking();
             }
         }
     }
@@ -480,23 +547,20 @@ write_perfetto(
     tracing_session->FlushBlocking();
     tracing_session->StopBlocking();
 
-    auto          filename = std::string{"results"};
-    auto          cleanup  = std::function<void(std::ostream*&)>{};
-    std::ostream* ofs      = nullptr;
-
-    std::tie(ofs, cleanup) = get_output_stream(filename, ".pftrace");
+    auto filename = std::string{"results"};
+    auto ofs      = get_output_stream(filename, ".pftrace");
 
     auto amount_read = std::atomic<size_t>{0};
     auto is_done     = std::promise<void>{};
     auto _mtx        = std::mutex{};
-    auto _reader     = [ofs, &_mtx, &is_done, &amount_read](
+    auto _reader     = [&ofs, &_mtx, &is_done, &amount_read](
                        ::perfetto::TracingSession::ReadTraceCallbackArgs _args) {
         auto _lk = std::unique_lock<std::mutex>{_mtx};
         if(_args.data && _args.size > 0)
         {
             ROCP_TRACE << "Writing " << _args.size << " B to trace...";
             // Write the trace data into file
-            ofs->write(_args.data, _args.size);
+            ofs.stream->write(_args.data, _args.size);
             amount_read += _args.size;
         }
         ROCP_INFO_IF(!_args.has_more && amount_read > 0)
@@ -517,10 +581,10 @@ write_perfetto(
     tracing_session.reset();
 
     ROCP_TRACE << "Flushing trace output stream...";
-    (*ofs) << std::flush;
+    (*ofs.stream) << std::flush;
 
     ROCP_TRACE << "Destroying trace output stream...";
-    if(cleanup) cleanup(ofs);
+    ofs.close();
 }
 
 }  // namespace tool

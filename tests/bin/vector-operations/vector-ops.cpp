@@ -26,9 +26,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <algorithm>
+#include <csignal>
 #include <iostream>
 #include <mutex>
 #include <vector>
+
+#include "common/defines.hpp"
 
 #define HIP_API_CALL(CALL)                                                                         \
     {                                                                                              \
@@ -166,9 +169,9 @@ run(int NUM_QUEUE, int DEVICE_ID)
     {
         HIP_API_CALL(hipStreamCreateWithFlags(&streams[q], hipStreamNonBlocking));
 
-        HIP_API_CALL(hipHostMalloc(&hostA[q], NUM * sizeof(float), 0));
-        HIP_API_CALL(hipHostMalloc(&hostB[q], NUM * sizeof(float), 0));
-        HIP_API_CALL(hipHostMalloc(&hostC[q], NUM * sizeof(float), 0));
+        HIP_API_CALL(HIP_HOST_ALLOC_FUNC(&hostA[q], NUM * sizeof(float), 0));
+        HIP_API_CALL(HIP_HOST_ALLOC_FUNC(&hostB[q], NUM * sizeof(float), 0));
+        HIP_API_CALL(HIP_HOST_ALLOC_FUNC(&hostC[q], NUM * sizeof(float), 0));
 
         // initialize the input data
         for(int i = 0; i < NUM; i++)
@@ -217,6 +220,12 @@ run(int NUM_QUEUE, int DEVICE_ID)
 
         HIP_API_CALL(hipGetLastError());
 
+        if(getenv("ROCPROF_TESTING_RAISE_SIGNAL") != nullptr &&
+           std::stoi(getenv("ROCPROF_TESTING_RAISE_SIGNAL")) > 0)
+        {
+            ::raise(SIGINT);
+        }
+
         hipLaunchKernelGGL(multiply_kernel,
                            dim3(WIDTH / THREADS_PER_BLOCK_X, HEIGHT / THREADS_PER_BLOCK_Y),
                            dim3(THREADS_PER_BLOCK_X, THREADS_PER_BLOCK_Y),
@@ -257,9 +266,9 @@ run(int NUM_QUEUE, int DEVICE_ID)
         HIP_API_CALL(hipFree(deviceB[q]));
         HIP_API_CALL(hipFree(deviceC[q]));
 
-        HIP_API_CALL(hipHostFree(hostA[q]));
-        HIP_API_CALL(hipHostFree(hostB[q]));
-        HIP_API_CALL(hipHostFree(hostC[q]));
+        HIP_API_CALL(HIP_HOST_FREE_FUNC(hostA[q]));
+        HIP_API_CALL(HIP_HOST_FREE_FUNC(hostB[q]));
+        HIP_API_CALL(HIP_HOST_FREE_FUNC(hostC[q]));
 
         HIP_API_CALL(hipStreamDestroy(streams[q]));
     }
@@ -268,13 +277,17 @@ run(int NUM_QUEUE, int DEVICE_ID)
 }
 
 int
-main()
+main(int argc, char** argv)
 {
+    int stream_count = 8;
     int device_count = 0;
     HIP_API_CALL(hipGetDeviceCount(&device_count));
 
+    if(argc > 1) stream_count = std::stoi(argv[1]);
+    if(argc > 2) device_count = std::stoi(argv[2]);
+
     for(int i = 0; i < device_count; ++i)
-        run(4, i);
+        run(stream_count, i);
 
     return 0;
 }

@@ -20,20 +20,27 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "hip/hip_runtime.h"
-#include "rocprofiler-sdk-roctx/roctx.h"
+#if defined(USE_ROCTRACER_ROCTX)
+#    include <roctracer/roctx.h>
+#else
+#    include <rocprofiler-sdk-roctx/roctx.h>
+#endif
 
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <iostream>
-#include <mutex>
-#include <random>
-#include <stdexcept>
+#include <hip/hip_runtime.h>
 
 #if defined(USE_MPI)
 #    include <mpi.h>
 #endif
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <sstream>
+#include <stdexcept>
 
 #define HIP_API_CALL(CALL)                                                                         \
     {                                                                                              \
@@ -98,6 +105,15 @@ main(int argc, char** argv)
     printf("[transpose] Number of threads: %zu\n", nthreads);
     printf("[transpose] Number of iterations: %zu\n", nitr);
     printf("[transpose] Syncing every %zu iterations\n", nsync);
+
+#if defined(USE_ROCTRACER_ROCTX)
+    {
+        auto _roctracer_roctx_ss = std::stringstream{};
+        _roctracer_roctx_ss << "roctracer/roctx v" << roctx_version_major() << "."
+                            << roctx_version_minor();
+        roctxMark(_roctracer_roctx_ss.str().c_str());
+    }
+#endif
 
 #if defined(USE_MPI)
     MPI_Init(&argc, &argv);
@@ -174,7 +190,15 @@ transpose(const int* in, int* out, int M, int N)
 void
 run(int rank, int tid, int devid, int argc, char** argv)
 {
-    roctxRangePush("run");
+    auto roctx_run_id = roctxRangeStart("run");
+
+    const auto mark = [rank, tid, devid](std::string_view suffix) {
+        auto _ss = std::stringstream{};
+        _ss << "run/rank-" << rank << "/thread-" << tid << "/device-" << devid << "/" << suffix;
+        roctxMark(_ss.str().c_str());
+    };
+
+    mark("begin");
 
     constexpr unsigned int M = 4960 * 2;
     constexpr unsigned int N = 4960 * 2;
@@ -206,8 +230,27 @@ run(int rank, int tid, int devid, int argc, char** argv)
     int* in  = nullptr;
     int* out = nullptr;
 
-    HIP_API_CALL(hipMalloc(&in, size));
-    HIP_API_CALL(hipMalloc(&out, size));
+    // lock during malloc to get more accurate memory info
+    {
+        _lk.lock();
+        constexpr auto MiB           = (1024UL * 1024UL);
+        size_t         free_gpu_mem  = 0;
+        size_t         total_gpu_mem = 0;
+
+        HIP_API_CALL(hipMemGetInfo(&free_gpu_mem, &total_gpu_mem));
+        free_gpu_mem /= MiB;
+        total_gpu_mem /= MiB;
+
+        std::cout << "[transpose][" << rank << "][" << tid
+                  << "] Available GPU memory (MiB): " << std::setw(6) << free_gpu_mem << " / "
+                  << std::setw(6) << total_gpu_mem << std::endl;
+
+        HIP_API_CALL(hipMallocAsync(&in, size, stream));
+        HIP_API_CALL(hipMallocAsync(&out, size, stream));
+
+        _lk.unlock();
+    }
+
     HIP_API_CALL(hipMemsetAsync(in, 0, size, stream));
     HIP_API_CALL(hipMemsetAsync(out, 0, size, stream));
     HIP_API_CALL(hipMemcpyAsync(in, inp_matrix, size, hipMemcpyHostToDevice, stream));
@@ -219,9 +262,16 @@ run(int rank, int tid, int devid, int argc, char** argv)
     auto t1 = std::chrono::high_resolution_clock::now();
     for(size_t i = 0; i < nitr; ++i)
     {
+        roctxRangePush("run/iteration");
         transpose<<<grid, block, 0, stream>>>(in, out, M, N);
         check_hip_error();
-        if(i % nsync == (nsync - 1)) HIP_API_CALL(hipStreamSynchronize(stream));
+        if(i % nsync == (nsync - 1))
+        {
+            roctxRangePush("run/iteration/sync");
+            HIP_API_CALL(hipStreamSynchronize(stream));
+            roctxRangePop();
+        }
+        roctxRangePop();
     }
     auto t2 = std::chrono::high_resolution_clock::now();
     HIP_API_CALL(hipStreamSynchronize(stream));
@@ -238,18 +288,22 @@ run(int rank, int tid, int devid, int argc, char** argv)
     print_lock.unlock();
 
     HIP_API_CALL(hipStreamSynchronize(stream));
-    HIP_API_CALL(hipStreamDestroy(stream));
 
     // cpu_transpose(matrix, out_matrix, M, N);
     verify(inp_matrix, out_matrix, M, N);
 
-    HIP_API_CALL(hipFree(in));
-    HIP_API_CALL(hipFree(out));
+    HIP_API_CALL(hipFreeAsync(in, stream));
+    HIP_API_CALL(hipFreeAsync(out, stream));
+
+    HIP_API_CALL(hipStreamSynchronize(stream));
+    HIP_API_CALL(hipStreamDestroy(stream));
 
     delete[] inp_matrix;
     delete[] out_matrix;
 
-    roctxRangePop();
+    mark("end");
+
+    roctxRangeStop(roctx_run_id);
 }
 
 namespace

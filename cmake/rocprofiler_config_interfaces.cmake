@@ -10,15 +10,15 @@ include(rocprofiler_config_nolink_target)
 # ########################################################################################
 
 target_include_directories(
-    rocprofiler-headers
+    rocprofiler-sdk-headers
     INTERFACE $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/source/include>
               $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/source/include>
               $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/source>
               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 target_compile_definitions(
-    rocprofiler-headers INTERFACE $<BUILD_INTERFACE:AMD_INTERNAL_BUILD=1>
-                                  $<BUILD_INTERFACE:__HIP_PLATFORM_AMD__=1>)
+    rocprofiler-sdk-headers INTERFACE $<BUILD_INTERFACE:AMD_INTERNAL_BUILD=1>
+                                      $<BUILD_INTERFACE:__HIP_PLATFORM_AMD__=1>)
 
 # ensure the env overrides the appending /opt/rocm later
 string(REPLACE ":" ";" CMAKE_PREFIX_PATH "$ENV{CMAKE_PREFIX_PATH};${CMAKE_PREFIX_PATH}")
@@ -55,12 +55,12 @@ find_library(pthread_LIBRARY NAMES pthread pthreads)
 find_package_handle_standard_args(pthread-library REQUIRED_VARS pthread_LIBRARY)
 
 if(pthread_LIBRARY)
-    target_link_libraries(rocprofiler-threading INTERFACE ${pthread_LIBRARY})
+    target_link_libraries(rocprofiler-sdk-threading INTERFACE ${pthread_LIBRARY})
 else()
     find_package(Threads ${rocprofiler_FIND_QUIETLY} ${rocprofiler_FIND_REQUIREMENT})
 
     if(Threads_FOUND)
-        target_link_libraries(rocprofiler-threading INTERFACE Threads::Threads)
+        target_link_libraries(rocprofiler-sdk-threading INTERFACE Threads::Threads)
     endif()
 endif()
 
@@ -75,7 +75,7 @@ foreach(_LIB dl rt)
     find_package_handle_standard_args(${_LIB}-library REQUIRED_VARS ${_LIB}_LIBRARY)
 
     if(${_LIB}_LIBRARY)
-        target_link_libraries(rocprofiler-threading INTERFACE ${${_LIB}_LIBRARY})
+        target_link_libraries(rocprofiler-sdk-threading INTERFACE ${${_LIB}_LIBRARY})
     endif()
 endforeach()
 
@@ -85,7 +85,7 @@ endforeach()
 #
 # ----------------------------------------------------------------------------------------#
 
-target_link_libraries(rocprofiler-atomic INTERFACE atomic)
+target_link_libraries(rocprofiler-sdk-atomic INTERFACE atomic)
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -95,9 +95,9 @@ target_link_libraries(rocprofiler-atomic INTERFACE atomic)
 
 if(NOT ROCPROFILER_BUILD_GHC_FS)
     if(CMAKE_CXX_COMPILER_IS_GNU AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.1)
-        target_link_libraries(rocprofiler-cxx-filesystem INTERFACE stdc++fs)
+        target_link_libraries(rocprofiler-sdk-cxx-filesystem INTERFACE stdc++fs)
     elseif(CMAKE_CXX_COMPILER_IS_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
-        target_link_libraries(rocprofiler-cxx-filesystem INTERFACE c++fs)
+        target_link_libraries(rocprofiler-sdk-cxx-filesystem INTERFACE c++fs)
     endif()
 endif()
 
@@ -107,7 +107,7 @@ endif()
 #
 # ----------------------------------------------------------------------------------------#
 
-find_package(rocm_version)
+find_package(rocm_version 6.2)
 
 if(rocm_version_FOUND)
     list(APPEND CMAKE_PREFIX_PATH "${rocm_version_DIR}" "${rocm_version_DIR}/llvm")
@@ -115,9 +115,19 @@ if(rocm_version_FOUND)
          "${rocm_version_DIR}/lib/cmake")
 endif()
 
-find_package(hip REQUIRED CONFIG)
-target_link_libraries(rocprofiler-hip INTERFACE hip::host)
-rocprofiler_config_nolink_target(rocprofiler-hip-nolink hip::host)
+find_package(
+    hip
+    6.2
+    REQUIRED
+    CONFIG
+    HINTS
+    ${rocm_version_DIR}
+    ${ROCM_PATH}
+    PATHS
+    ${rocm_version_DIR}
+    ${ROCM_PATH})
+target_link_libraries(rocprofiler-sdk-hip INTERFACE hip::host)
+rocprofiler_config_nolink_target(rocprofiler-sdk-hip-nolink hip::host)
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -127,6 +137,7 @@ rocprofiler_config_nolink_target(rocprofiler-hip-nolink hip::host)
 
 find_package(
     hsa-runtime64
+    1.14
     REQUIRED
     CONFIG
     HINTS
@@ -142,11 +153,11 @@ string(REPLACE "." ";" HSA_RUNTIME_VERSION "${hsa-runtime64_VERSION}")
 list(GET HSA_RUNTIME_VERSION 0 HSA_RUNTIME_VERSION_MAJOR)
 list(GET HSA_RUNTIME_VERSION 1 HSA_RUNTIME_VERSION_MINOR)
 
-target_link_libraries(rocprofiler-hsa-runtime INTERFACE hsa-runtime64::hsa-runtime64)
-rocprofiler_config_nolink_target(rocprofiler-hsa-runtime-nolink
+target_link_libraries(rocprofiler-sdk-hsa-runtime INTERFACE hsa-runtime64::hsa-runtime64)
+rocprofiler_config_nolink_target(rocprofiler-sdk-hsa-runtime-nolink
                                  hsa-runtime64::hsa-runtime64)
 
-rocprofiler_parse_hsa_api_table_versions(rocprofiler-hsa-runtime-nolink)
+rocprofiler_parse_hsa_api_table_versions(rocprofiler-sdk-hsa-runtime-nolink)
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -167,7 +178,7 @@ find_package(
     PATH_SUFFIXES
     lib/cmake/amd_comgr)
 
-target_link_libraries(rocprofiler-amd-comgr INTERFACE amd_comgr)
+target_link_libraries(rocprofiler-sdk-amd-comgr INTERFACE amd_comgr)
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -175,7 +186,7 @@ target_link_libraries(rocprofiler-amd-comgr INTERFACE amd_comgr)
 #
 # ----------------------------------------------------------------------------------------#
 
-target_link_libraries(rocprofiler-ptl INTERFACE PTL::ptl-static)
+target_link_libraries(rocprofiler-sdk-ptl INTERFACE PTL::ptl-static)
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -184,7 +195,7 @@ target_link_libraries(rocprofiler-ptl INTERFACE PTL::ptl-static)
 # ----------------------------------------------------------------------------------------#
 
 find_package(libelf REQUIRED)
-target_link_libraries(rocprofiler-elf INTERFACE libelf::libelf)
+target_link_libraries(rocprofiler-sdk-elf INTERFACE libelf::libelf)
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -193,7 +204,7 @@ target_link_libraries(rocprofiler-elf INTERFACE libelf::libelf)
 # ----------------------------------------------------------------------------------------#
 
 find_package(libdw REQUIRED)
-target_link_libraries(rocprofiler-dw INTERFACE libdw::libdw)
+target_link_libraries(rocprofiler-sdk-dw INTERFACE libdw::libdw)
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -207,7 +218,7 @@ find_library(
     HINTS ${rocm_version_DIR} ${ROCM_PATH}
     PATHS ${rocm_version_DIR} ${ROCM_PATH})
 
-target_link_libraries(rocprofiler-hsa-aql INTERFACE ${hsa-amd-aqlprofile64_library})
+target_link_libraries(rocprofiler-sdk-hsa-aql INTERFACE ${hsa-amd-aqlprofile64_library})
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -228,8 +239,8 @@ find_package(
     PATH_SUFFIXES
     lib/cmake/hsakmt)
 
-target_link_libraries(rocprofiler-hsakmt INTERFACE hsakmt::hsakmt)
-rocprofiler_config_nolink_target(rocprofiler-hsakmt-nolink hsakmt::hsakmt)
+target_link_libraries(rocprofiler-sdk-hsakmt INTERFACE hsakmt::hsakmt)
+rocprofiler_config_nolink_target(rocprofiler-sdk-hsakmt-nolink hsakmt::hsakmt)
 
 # ----------------------------------------------------------------------------------------#
 #
@@ -263,6 +274,54 @@ find_library(
     HINTS ${rocm_version_DIR} ${ROCM_PATH} /opt/amdgpu
     PATHS ${rocm_version_DIR} ${ROCM_PATH} /opt/amdgpu REQUIRED)
 
-target_include_directories(rocprofiler-drm SYSTEM INTERFACE ${drm_INCLUDE_DIR}
-                                                            ${xf86drm_INCLUDE_DIR})
-target_link_libraries(rocprofiler-drm INTERFACE ${drm_LIBRARY} ${drm_amdgpu_LIBRARY})
+target_include_directories(rocprofiler-sdk-drm SYSTEM INTERFACE ${drm_INCLUDE_DIR}
+                                                                ${xf86drm_INCLUDE_DIR})
+target_link_libraries(rocprofiler-sdk-drm INTERFACE ${drm_LIBRARY} ${drm_amdgpu_LIBRARY})
+
+# ----------------------------------------------------------------------------------------#
+#
+# ELFIO library
+#
+# ----------------------------------------------------------------------------------------#
+
+# get_target_property(ELFIO_INCLUDE_DIR elfio::elfio INTERFACE_INCLUDE_DIRECTORIES)
+# target_include_directories(rocprofiler-sdk-elfio SYSTEM INTERFACE ${ELFIO_INCLUDE_DIR})
+target_link_libraries(rocprofiler-sdk-elfio INTERFACE elfio::elfio)
+
+# ----------------------------------------------------------------------------------------#
+#
+# OTF2
+#
+# ----------------------------------------------------------------------------------------#
+
+target_link_libraries(rocprofiler-sdk-otf2 INTERFACE otf2::otf2)
+
+# ----------------------------------------------------------------------------------------#
+#
+# RCCL
+#
+# ----------------------------------------------------------------------------------------#
+
+find_package(
+    rccl
+    CONFIG
+    HINTS
+    ${rocm_version_DIR}
+    ${ROCM_PATH}
+    PATHS
+    ${rocm_version_DIR}
+    ${ROCM_PATH}
+    PATH_SUFFIXES
+    lib/cmake/rccl)
+
+if(rccl_FOUND
+   AND rccl_INCLUDE_DIR
+   AND EXISTS "${rccl_INCLUDE_DIR}/rccl/amd_detail/api_trace.h")
+    set(rccl_API_TRACE_FOUND ON)
+    rocprofiler_config_nolink_target(rocprofiler-sdk-rccl-nolink rccl::rccl)
+else()
+    set(rccl_API_TRACE_FOUND OFF)
+    target_compile_definitions(rocprofiler-sdk-rccl-nolink
+                               INTERFACE ROCPROFILER_SDK_USE_SYSTEM_RCCL=0)
+
+endif()

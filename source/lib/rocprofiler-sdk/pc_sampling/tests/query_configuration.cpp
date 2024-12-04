@@ -20,6 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include "lib/common/utility.hpp"
+
 #include <gtest/gtest.h>
 #include <rocprofiler-sdk/buffer.h>
 #include <rocprofiler-sdk/fwd.h>
@@ -44,7 +46,7 @@ struct callback_data
 {
     rocprofiler_client_id_t*                    client_id             = nullptr;
     rocprofiler_client_finalize_t               client_fini_func      = nullptr;
-    rocprofiler_context_id_t                    client_ctx            = {};
+    rocprofiler_context_id_t                    client_ctx            = {0};
     rocprofiler_buffer_id_t                     client_buffer         = {};
     rocprofiler_callback_thread_t               client_thread         = {};
     uint64_t                                    client_workflow_count = {};
@@ -243,9 +245,11 @@ TEST(pc_sampling, query_configs_after_service_setup)
                                                static_cast<void*>(&cb_data->gpu_pcs_agents)),
             "Failed to find GPU agents");
 
-        // TODO-VLAINDIC: Can we dynamically skip the test if the underlying
-        //   HW does not support PC sampling
-        if(cb_data->gpu_pcs_agents.size() == 0) exit(0);
+        if(cb_data->gpu_pcs_agents.size() == 0)
+        {
+            ROCP_ERROR << "PC sampling unavailable\n";
+            exit(0);
+        }
 
         int         query_cb_data = USER_DATA_VAL;
         const auto* agent         = cb_data->gpu_pcs_agents.at(0);

@@ -27,6 +27,7 @@
 #include <rocprofiler-sdk/hip.h>
 #include <rocprofiler-sdk/hsa.h>
 #include <rocprofiler-sdk/marker.h>
+#include <rocprofiler-sdk/rccl.h>
 
 #include <hsa/hsa.h>
 #include <hsa/hsa_amd_tool.h>
@@ -88,6 +89,16 @@ typedef struct
 } rocprofiler_callback_tracing_marker_api_data_t;
 
 /**
+ * @brief ROCProfiler RCCL API Callback Data.
+ */
+typedef struct
+{
+    uint64_t                      size;  ///< size of this struct
+    rocprofiler_rccl_api_args_t   args;
+    rocprofiler_rccl_api_retval_t retval;
+} rocprofiler_callback_tracing_rccl_api_data_t;
+
+/**
  * @brief ROCProfiler Code Object Load Tracer Callback Record.
  */
 typedef struct
@@ -129,6 +140,11 @@ typedef struct
         };
     };
 } rocprofiler_callback_tracing_code_object_load_data_t;
+
+/**
+ * @brief The NULL value of a code object id. Used when code object is unknown.
+ */
+#define ROCPROFILER_CODE_OBJECT_ID_NONE ROCPROFILER_UINT64_C(0)
 
 /**
  * @brief ROCProfiler Code Object Kernel Symbol Tracer Callback Record.
@@ -233,7 +249,7 @@ typedef int (*rocprofiler_callback_tracing_kind_cb_t)(rocprofiler_callback_traci
  */
 typedef int (*rocprofiler_callback_tracing_kind_operation_cb_t)(
     rocprofiler_callback_tracing_kind_t kind,
-    uint32_t                            operation,
+    rocprofiler_tracing_operation_t     operation,
     void*                               data);
 
 /**
@@ -256,7 +272,7 @@ typedef int (*rocprofiler_callback_tracing_kind_operation_cb_t)(
  */
 typedef int (*rocprofiler_callback_tracing_operation_args_cb_t)(
     rocprofiler_callback_tracing_kind_t kind,
-    uint32_t                            operation,
+    rocprofiler_tracing_operation_t     operation,
     uint32_t                            arg_number,
     const void* const                   arg_value_addr,
     int32_t                             arg_indirection_count,
@@ -295,13 +311,13 @@ typedef int (*rocprofiler_callback_tracing_operation_args_cb_t)(
  * other words, we do not support overriding or combining the operations in separate function calls.
  *
  */
-rocprofiler_status_t ROCPROFILER_API
-rocprofiler_configure_callback_tracing_service(rocprofiler_context_id_t            context_id,
-                                               rocprofiler_callback_tracing_kind_t kind,
-                                               rocprofiler_tracing_operation_t*    operations,
-                                               size_t                              operations_count,
-                                               rocprofiler_callback_tracing_cb_t   callback,
-                                               void*                               callback_args);
+rocprofiler_status_t
+rocprofiler_configure_callback_tracing_service(rocprofiler_context_id_t               context_id,
+                                               rocprofiler_callback_tracing_kind_t    kind,
+                                               const rocprofiler_tracing_operation_t* operations,
+                                               size_t                            operations_count,
+                                               rocprofiler_callback_tracing_cb_t callback,
+                                               void* callback_args) ROCPROFILER_API;
 
 /**
  * @brief Query the name of the callback tracing kind. The name retrieved from this function is a
@@ -340,9 +356,9 @@ rocprofiler_query_callback_tracing_kind_name(rocprofiler_callback_tracing_kind_t
  */
 rocprofiler_status_t
 rocprofiler_query_callback_tracing_kind_operation_name(rocprofiler_callback_tracing_kind_t kind,
-                                                       uint32_t     operation,
-                                                       const char** name,
-                                                       uint64_t*    name_len) ROCPROFILER_API;
+                                                       rocprofiler_tracing_operation_t operation,
+                                                       const char**                    name,
+                                                       uint64_t* name_len) ROCPROFILER_API;
 
 /**
  * @brief Iterate over all the mappings of the callback tracing kinds and get a callback for each
@@ -353,9 +369,9 @@ rocprofiler_query_callback_tracing_kind_operation_name(rocprofiler_callback_trac
  * @param [in] data User data passed back into the callback
  * @return ::rocprofiler_status_t
  */
-rocprofiler_status_t ROCPROFILER_API
+rocprofiler_status_t
 rocprofiler_iterate_callback_tracing_kinds(rocprofiler_callback_tracing_kind_cb_t callback,
-                                           void* data) ROCPROFILER_NONNULL(1);
+                                           void* data) ROCPROFILER_API ROCPROFILER_NONNULL(1);
 
 /**
  * @brief Iterates over all the mappings of the operations for a given @ref
@@ -370,11 +386,11 @@ rocprofiler_iterate_callback_tracing_kinds(rocprofiler_callback_tracing_kind_cb_
  * @retval ::ROCPROFILER_STATUS_ERROR_KIND_NOT_FOUND Invalid domain id
  * @retval ::ROCPROFILER_STATUS_SUCCESS Valid domain
  */
-rocprofiler_status_t ROCPROFILER_API
+rocprofiler_status_t
 rocprofiler_iterate_callback_tracing_kind_operations(
     rocprofiler_callback_tracing_kind_t              kind,
     rocprofiler_callback_tracing_kind_operation_cb_t callback,
-    void*                                            data) ROCPROFILER_NONNULL(2);
+    void*                                            data) ROCPROFILER_API ROCPROFILER_NONNULL(2);
 
 /**
  * @brief Iterates over all the arguments for the traced function (when available). This is
@@ -433,12 +449,12 @@ rocprofiler_iterate_callback_tracing_kind_operations(
  * uninitialized pointers do not cause segmentation faults.
  * @param[in] user_data Data to be passed to each invocation of the callback
  */
-rocprofiler_status_t ROCPROFILER_API
+rocprofiler_status_t
 rocprofiler_iterate_callback_tracing_kind_operation_args(
     rocprofiler_callback_tracing_record_t            record,
     rocprofiler_callback_tracing_operation_args_cb_t callback,
     int32_t                                          max_dereference_count,
-    void*                                            user_data) ROCPROFILER_NONNULL(2);
+    void* user_data) ROCPROFILER_API ROCPROFILER_NONNULL(2);
 
 /** @} */
 

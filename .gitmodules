@@ -22,3 +22,9 @@
 [submodule "external/perfetto"]
 	path = external/perfetto
 	url = https://android.googlesource.com/platform/external/perfetto
+[submodule "external/elfio"]
+	path = external/elfio
+	url = https://github.com/serge1/ELFIO.git
+[submodule "external/yaml-cpp"]
+	path = external/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <tuple>
+#include <utility>
 
 #include <fmt/core.h>
 #include <gtest/gtest.h>
@@ -241,9 +242,8 @@ TEST(evaluate_ast, counter_constants)
         {"MAX_WAVE_SIZE", Metric("gfx9", "MAX_WAVE_SIZE", "a", "a", "a", "wave_front_size", "", 0)},
         {"SE_NUM",
          Metric("gfx9", "SE_NUM", "b", "b", "b", "array_count/simd_arrays_per_engine", "", 4)},
-        {"SIMD_NUM", Metric("gfx9", "SIMD_NUM", "C", "C", "C", "simd_per_cu/CU_NUM", "", 2)},
-        {"CU_NUM",
-         Metric("gfx9", "CU_NUM", "D", "D", "D", "cu_per_simd_array*array_count", "", 5)}};
+        {"SIMD_NUM", Metric("gfx9", "SIMD_NUM", "C", "C", "C", "simd_count", "", 2)},
+        {"CU_NUM", Metric("gfx9", "CU_NUM", "D", "D", "D", "simd_count/simd_per_cu", "", 5)}};
     add_constants(metrics, 6);
     std::unordered_map<std::string, std::unordered_map<std::string, EvaluateAST>> asts;
 
@@ -269,13 +269,14 @@ TEST(evaluate_ast, counter_constants)
     test_data.simd_arrays_per_engine = 5;
     test_data.simd_per_cu            = 104;
     test_data.cu_per_simd_array      = 156;
+    test_data.simd_count             = 156 * 104 * 8;
 
     // Check that required counters is calculated correctly
     std::unordered_map<std::string, std::set<std::string>> required_counters = {
         {"MAX_WAVE_SIZE", {"wave_front_size"}},
         {"SE_NUM", {"array_count", "simd_arrays_per_engine"}},
-        {"SIMD_NUM", {"simd_per_cu", "cu_per_simd_array", "array_count"}},
-        {"CU_NUM", {"cu_per_simd_array", "array_count"}},
+        {"SIMD_NUM", {"simd_count"}},
+        {"CU_NUM", {"simd_count", "simd_per_cu"}},
     };
 
     // Check that the values are being read from agent_t correctly
@@ -285,13 +286,14 @@ TEST(evaluate_ast, counter_constants)
         {"simd_arrays_per_engine", 5},
         {"simd_per_cu", 104},
         {"cu_per_simd_array", 156},
+        {"simd_count", 156 * 104 * 8},
     };
 
     // Check that the evaluation of the special counters is correct
     std::unordered_map<std::string, double> final_computed_values = {
         {"MAX_WAVE_SIZE", 32},
         {"SE_NUM", 8.0 / 5.0},
-        {"SIMD_NUM", 104.0 / (156.0 * 8.0)},
+        {"SIMD_NUM", 156 * 8 * 104},
         {"CU_NUM", 156 * 8},
     };
 
@@ -647,7 +649,7 @@ run_reduce_test(
         }
     }
 }
-};  // namespace
+}  // namespace
 
 TEST(evaluate_ast, counter_reduction_sum)
 {
@@ -718,7 +720,8 @@ TEST(evaluate_ast, counter_reduction_sum)
                  times_vec(std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                       .counter_value = 5.0,
                                                                       .dispatch_id   = 0,
-                                                                      .user_data = {.value = 0}}},
+                                                                      .user_data     = {.value = 0},
+                                                                      .agent_id = {.handle = 0}}},
                            sum_vec(base_counter_data["VOORHEES"])),
                  sum_vec(base_counter_data["KRUEGER"])),
              2},
@@ -729,7 +732,8 @@ TEST(evaluate_ast, counter_reduction_sum)
                           std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                      .counter_value = 5.0,
                                                                      .dispatch_id   = 0,
-                                                                     .user_data = {.value = 0}}})),
+                                                                     .user_data     = {.value = 0},
+                                                                     .agent_id = {.handle = 0}}})),
              2},
         };
 
@@ -804,7 +808,8 @@ TEST(evaluate_ast, counter_reduction_min)
                  times_vec(std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                       .counter_value = 5.0,
                                                                       .dispatch_id   = 0,
-                                                                      .user_data = {.value = 0}}},
+                                                                      .user_data     = {.value = 0},
+                                                                      .agent_id = {.handle = 0}}},
                            min_vec(base_counter_data["VOORHEES"])),
                  min_vec(base_counter_data["KRUEGER"])),
              2},
@@ -815,7 +820,8 @@ TEST(evaluate_ast, counter_reduction_min)
                           std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                      .counter_value = 5.0,
                                                                      .dispatch_id   = 0,
-                                                                     .user_data = {.value = 0}}})),
+                                                                     .user_data     = {.value = 0},
+                                                                     .agent_id = {.handle = 0}}})),
              2},
         };
 
@@ -890,7 +896,8 @@ TEST(evaluate_ast, counter_reduction_max)
                  times_vec(std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                       .counter_value = 5.0,
                                                                       .dispatch_id   = 0,
-                                                                      .user_data = {.value = 0}}},
+                                                                      .user_data     = {.value = 0},
+                                                                      .agent_id = {.handle = 0}}},
                            max_vec(base_counter_data["VOORHEES"])),
                  max_vec(base_counter_data["KRUEGER"])),
              2},
@@ -901,7 +908,8 @@ TEST(evaluate_ast, counter_reduction_max)
                           std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                      .counter_value = 5.0,
                                                                      .dispatch_id   = 0,
-                                                                     .user_data = {.value = 0}}})),
+                                                                     .user_data     = {.value = 0},
+                                                                     .agent_id = {.handle = 0}}})),
              2},
         };
 
@@ -978,7 +986,8 @@ TEST(evaluate_ast, counter_reduction_avg)
                  times_vec(std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                       .counter_value = 5.0,
                                                                       .dispatch_id   = 0,
-                                                                      .user_data = {.value = 0}}},
+                                                                      .user_data     = {.value = 0},
+                                                                      .agent_id = {.handle = 0}}},
                            avg_vec(base_counter_data["VOORHEES"])),
                  avg_vec(base_counter_data["KRUEGER"])),
              2},
@@ -989,7 +998,8 @@ TEST(evaluate_ast, counter_reduction_avg)
                           std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                      .counter_value = 5.0,
                                                                      .dispatch_id   = 0,
-                                                                     .user_data = {.value = 0}}})),
+                                                                     .user_data     = {.value = 0},
+                                                                     .agent_id = {.handle = 0}}})),
              2},
         };
 
@@ -1024,13 +1034,14 @@ TEST(evaluate_ast, evaluate_mixed_counters)
     test_data.simd_arrays_per_engine = 5;
     test_data.simd_per_cu            = 104;
     test_data.cu_per_simd_array      = 156;
+    test_data.simd_count             = 624;
 
     std::unordered_map<std::string, Metric> metrics = {
         {"MAX_WAVE_SIZE", Metric("gfx9", "MAX_WAVE_SIZE", "a", "a", "a", "wave_front_size", "", 0)},
         {"SE_NUM",
          Metric("gfx9", "SE_NUM", "b", "b", "b", "array_count/simd_arrays_per_engine", "", 1)},
-        {"CU_NUM", Metric("gfx9", "CU_NUM", "D", "D", "D", "cu_per_simd_array*array_count", "", 2)},
-        {"SIMD_NUM", Metric("gfx9", "SIMD_NUM", "C", "C", "C", "simd_per_cu/CU_NUM", "", 3)},
+        {"CU_NUM", Metric("gfx9", "CU_NUM", "D", "D", "D", "simd_count/simd_per_cu", "", 2)},
+        {"SIMD_NUM", Metric("gfx9", "SIMD_NUM", "C", "C", "C", "simd_count", "", 3)},
         {"VOORHEES", Metric("gfx9", "VOORHEES", "a", "a", "a", "", "", 4)},
         {"KRUEGER", Metric("gfx9", "KRUEGER", "a", "a", "a", "", "", 5)},
         {"BATES",
@@ -1048,26 +1059,29 @@ TEST(evaluate_ast, evaluate_mixed_counters)
     std::vector<std::tuple<std::string, std::vector<rocprofiler_record_counter_t>, int64_t>>
         derived_counters = {
             {"BATES",
-             times_vec(
-                 std::vector<rocprofiler_record_counter_t>{
-                     {.id = 0, .counter_value = 32, .dispatch_id = 0, .user_data = {.value = 0}}},
-                 sum_vec(base_counter_data["VOORHEES"])),
+             times_vec(std::vector<rocprofiler_record_counter_t>{{.id            = 0,
+                                                                  .counter_value = 32,
+                                                                  .dispatch_id   = 0,
+                                                                  .user_data     = {.value = 0},
+                                                                  .agent_id      = {.handle = 0}}},
+                       sum_vec(base_counter_data["VOORHEES"])),
              2},
             {"KRAMER",
              times_vec(sum_vec(base_counter_data["KRUEGER"]),
                        std::vector<rocprofiler_record_counter_t>{{.id            = 0,
                                                                   .counter_value = 8.0 / 5.0,
                                                                   .dispatch_id   = 0,
-                                                                  .user_data     = {.value = 0}}}),
+                                                                  .user_data     = {.value = 0},
+                                                                  .agent_id      = {.handle = 0}}}),
              3},
             {"TORRANCE",
-             times_vec(
-                 sum_vec(base_counter_data["KRUEGER"]),
-                 std::vector<rocprofiler_record_counter_t>{{.id            = 0,
-                                                            .counter_value = 104.0 / (156.0 * 8.0),
-                                                            .dispatch_id   = 0,
-                                                            .user_data     = {.value = 0}}}),
-             4},
+             times_vec(sum_vec(base_counter_data["KRUEGER"]),
+                       std::vector<rocprofiler_record_counter_t>{{.id            = 0,
+                                                                  .counter_value = 624,
+                                                                  .dispatch_id   = 0,
+                                                                  .user_data     = {.value = 0},
+                                                                  .agent_id      = {.handle = 0}}}),
+             2},
         };
 
     std::unordered_map<std::string, std::unordered_map<std::string, EvaluateAST>> asts;
@@ -1110,6 +1124,104 @@ TEST(evaluate_ast, evaluate_mixed_counters)
         auto ret = asts.at("gfx9").at(name).evaluate(base_counter_decode, cache);
         EXPECT_EQ(ret->size(), expected.size());
         ASSERT_EQ(expected.size(), 1);
+        int pos = 0;
+        asts.at("gfx9").at(name).set_out_id(*ret);
+        for(const auto& v : *ret)
+        {
+            set_counter_in_rec(expected.at(pos).id, {.handle = metrics[name].id()});
+            EXPECT_EQ(v.id, expected.at(pos).id);
+            EXPECT_FLOAT_EQ(v.counter_value, expected.at(pos).counter_value);
+            pos++;
+        }
+    }
+}
+
+TEST(evaluate_ast, derived_counter_reduction)
+{
+    using namespace rocprofiler::counters;
+
+    auto get_base_rec_id = [](uint64_t counter_id) {
+        rocprofiler_counter_instance_id_t base_id = 0;
+        set_counter_in_rec(base_id, {.handle = counter_id});
+        return base_id;
+    };
+
+    auto max_vec = [](auto&& a) -> auto&
+    {
+        a[0].counter_value = std::max_element(a.begin(), a.end(), [](const auto& b, const auto& c) {
+                                 return b.counter_value < c.counter_value;
+                             })->counter_value;
+        a.resize(1);
+        CHECK(a.size() == 1);
+        return a;
+    };
+
+    auto sum_vec = [](auto&& a) -> auto&
+    {
+        for(size_t i = 1; i < a.size(); i++)
+        {
+            a[0].counter_value += a[i].counter_value;
+        }
+        a.resize(1);
+        CHECK(a.size() == 1);
+        return a;
+    };
+
+    std::unordered_map<std::string, Metric> metrics = {
+        {"VOORHEES", Metric("gfx9", "VOORHEES", "a", "a", "a", "", "", 0)},
+        {"KRUEGER", Metric("gfx9", "KRUEGER", "a", "a", "a", "", "", 1)},
+        {"max_BATES",
+         Metric("gfx9", "max_BATES", "C", "C", "C", "reduce(VOORHEES+KRUEGER,max)", "", 2)},
+        {"sum_BATES",
+         Metric("gfx9", "sum_BATES", "C", "C", "C", "reduce(VOORHEES+KRUEGER,sum)", "", 3)}};
+
+    std::unordered_map<std::string, std::vector<rocprofiler_record_counter_t>> base_counter_data = {
+        {"VOORHEES", construct_test_data_dim(get_base_rec_id(0), {ROCPROFILER_DIMENSION_NONE}, 8)},
+        {"KRUEGER", construct_test_data_dim(get_base_rec_id(1), {ROCPROFILER_DIMENSION_NONE}, 8)},
+    };
+
+    std::unordered_map<std::string, std::unordered_map<std::string, EvaluateAST>> asts;
+    for(const auto& [val, metric] : metrics)
+    {
+        RawAST* ast = nullptr;
+        auto    buf = yy_scan_string(metric.expression().empty() ? metric.name().c_str()
+                                                                 : metric.expression().c_str());
+        yyparse(&ast);
+        ASSERT_TRUE(ast) << metric.expression() << " " << metric.name();
+        asts.emplace("gfx9", std::unordered_map<std::string, EvaluateAST>{})
+            .first->second.emplace(val,
+                                   EvaluateAST({.handle = metric.id()}, metrics, *ast, "gfx9"));
+        yy_delete_buffer(buf);
+        delete ast;
+    }
+
+    std::vector<std::tuple<std::string, std::vector<rocprofiler_record_counter_t>, int64_t>>
+        derived_counters = {
+            {"max_BATES",
+             max_vec(plus_vec(base_counter_data["VOORHEES"], base_counter_data["KRUEGER"])),
+             2},
+            {"sum_BATES",
+             sum_vec(plus_vec(base_counter_data["VOORHEES"], base_counter_data["KRUEGER"])),
+             2},
+        };
+
+    std::unordered_map<uint64_t, std::vector<rocprofiler_record_counter_t>> base_counter_decode;
+    for(const auto& [name, base_counter_v] : base_counter_data)
+    {
+        base_counter_decode[metrics[name].id()] = base_counter_v;
+    }
+
+    for(auto& [name, expected, eval_count] : derived_counters)
+    {
+        ROCP_INFO << name;
+        auto eval_counters =
+            rocprofiler::counters::get_required_hardware_counters(asts, "gfx9", metrics[name]);
+        ASSERT_TRUE(eval_counters);
+        ASSERT_EQ(eval_counters->size(), eval_count);
+        std::vector<std::unique_ptr<std::vector<rocprofiler_record_counter_t>>> cache;
+        asts.at("gfx9").at(name).expand_derived(asts.at("gfx9"));
+        auto ret = asts.at("gfx9").at(name).evaluate(base_counter_decode, cache);
+        EXPECT_EQ(ret->size(), expected.size());
         int pos = 0;
         asts.at("gfx9").at(name).set_out_id(*ret);
         for(const auto& v : *ret)

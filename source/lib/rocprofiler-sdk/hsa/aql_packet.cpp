@@ -21,6 +21,7 @@
 // THE SOFTWARE.
 
 #include "lib/rocprofiler-sdk/hsa/aql_packet.hpp"
+#include <fmt/core.h>
 #include <cstdlib>
 #include <iostream>
 #include "lib/common/logging.hpp"
@@ -36,6 +37,9 @@ namespace rocprofiler
 {
 namespace hsa
 {
+constexpr uint16_t VENDOR_BIT  = HSA_PACKET_TYPE_VENDOR_SPECIFIC << HSA_PACKET_HEADER_TYPE;
+constexpr uint16_t BARRIER_BIT = 1 << HSA_PACKET_HEADER_BARRIER;
+
 hsa_status_t
 CounterAQLPacket::CounterMemoryPool::Alloc(void** ptr, size_t size, desc_t flags, void* data)
 {
@@ -105,6 +109,8 @@ CounterAQLPacket::CounterAQLPacket(aqlprofile_agent_handle_t                  ag
     profile.events      = events.data();
     profile.event_count = static_cast<uint32_t>(events.size());
 
+    ROCP_TRACE << "profile events count: " << profile.event_count;
+
     hsa_status_t status = aqlprofile_pmc_create_packets(&this->handle,
                                                         &this->packets,
                                                         profile,
@@ -112,12 +118,23 @@ CounterAQLPacket::CounterAQLPacket(aqlprofile_agent_handle_t                  ag
                                                         &CounterMemoryPool::Free,
                                                         &CounterMemoryPool::Copy,
                                                         reinterpret_cast<void*>(&pool));
-    if(status != HSA_STATUS_SUCCESS) ROCP_FATAL << "Could not create PMC packets!";
+    if(status != HSA_STATUS_SUCCESS)
+    {
+        std::string event_list;
+        for(const auto& event : events)
+        {
+            event_list += fmt::format("[{},{},{}],",
+                                      event.block_index,
+                                      event.event_id,
+                                      static_cast<int>(event.block_name));
+        }
+        ROCP_FATAL << "Could not create PMC packets! AQLProfile Return Code: " << status
+                   << " Events: " << event_list;
+    }
 
-    auto header                 = HSA_PACKET_TYPE_VENDOR_SPECIFIC << HSA_PACKET_HEADER_TYPE;
-    packets.start_packet.header = header;
-    packets.stop_packet.header  = header;
-    packets.read_packet.header  = header;
+    packets.start_packet.header = VENDOR_BIT;
+    packets.stop_packet.header  = VENDOR_BIT | BARRIER_BIT;
+    packets.read_packet.header  = VENDOR_BIT | BARRIER_BIT;
     empty                       = false;
 }
 
@@ -141,7 +158,7 @@ TraceMemoryPool::Alloc(void** ptr, size_t size, desc_t flags, void* data)
     {
         // Return page aligned data to avoid cache flush overlap
         status = pool.allocate_fn(pool.gpu_pool_, size + 0x2000, 0, ptr);
-        *ptr   = (void*) ((uintptr_t(*ptr) + 0xFFF) & ~0xFFFul);  // NOLINT
+        *ptr = (void*) ((uintptr_t(*ptr) + 0xFFF) & ~0xFFFul);  // NOLINT(performance-no-int-to-ptr)
     }
     return status;
 }
@@ -179,8 +196,8 @@ TraceControlAQLPacket::TraceControlAQLPacket(const TraceMemoryPool&          _tr
                                                 tracepool.get());
     CHECK_HSA(status, "failed to create ATT packet");
 
-    packets.start_packet.header = HSA_PACKET_TYPE_VENDOR_SPECIFIC << HSA_PACKET_HEADER_TYPE;
-    packets.stop_packet.header  = HSA_PACKET_TYPE_VENDOR_SPECIFIC << HSA_PACKET_HEADER_TYPE;
+    packets.start_packet.header            = VENDOR_BIT | BARRIER_BIT;
+    packets.stop_packet.header             = VENDOR_BIT | BARRIER_BIT;
     packets.start_packet.completion_signal = hsa_signal_t{.handle = 0};
     packets.stop_packet.completion_signal  = hsa_signal_t{.handle = 0};
     this->empty                            = false;

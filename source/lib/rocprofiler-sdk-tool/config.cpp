@@ -27,12 +27,18 @@
 #include "lib/common/demangle.hpp"
 #include "lib/common/environment.hpp"
 #include "lib/common/filesystem.hpp"
+#include "lib/common/logging.hpp"
+#include "lib/common/units.hpp"
 #include "lib/common/utility.hpp"
+
+#include <rocprofiler-sdk/cxx/details/tokenize.hpp>
 
 #include <fmt/core.h>
 
+#include <linux/limits.h>
 #include <unistd.h>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -40,6 +46,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rocprofiler
@@ -48,27 +55,60 @@ namespace tool
 {
 namespace
 {
-std::string*
-get_local_datetime(const std::string& dt_format);
+template <typename Tp>
+auto
+as_pointer(Tp&& _val)
+{
+    return new Tp{_val};
+}
 
-const auto* launch_datetime = get_local_datetime(get_env("ROCP_TIME_FORMAT", "%F_%H.%M"));
-const auto  env_regexes =
-    new std::array<std::regex, 2>{std::regex{"(.*)%(env|ENV)\\{([A-Z0-9_]+)\\}%(.*)"},
-                                  std::regex{"(.*)\\$(env|ENV)\\{([A-Z0-9_]+)\\}(.*)"}};
+std::string*
+get_local_datetime(const std::string& dt_format, std::time_t*& dt_curr);
+
+std::time_t* launch_time  = nullptr;
+const auto*  launch_clock = as_pointer(std::chrono::system_clock::now());
+const auto*  launch_datetime =
+    get_local_datetime(get_env("ROCP_TIME_FORMAT", "%F_%H.%M"), launch_time);
+const auto env_regexes =
+    new std::array<std::regex, 3>{std::regex{"(.*)%(env|ENV)\\{([A-Z0-9_]+)\\}%(.*)"},
+                                  std::regex{"(.*)\\$(env|ENV)\\{([A-Z0-9_]+)\\}(.*)"},
+                                  std::regex{"(.*)%q\\{([A-Z0-9_]+)\\}(.*)"}};
+// env regex examples:
+//  - %env{USER}%       Consistent with other output key formats (start+end with %)
+//  - $ENV{USER}        Similar to CMake
+//  - %q{USER}          Compatibility with NVIDIA
+//
 
 std::string*
-get_local_datetime(const std::string& dt_format)
+get_local_datetime(const std::string& dt_format, std::time_t*& _dt_curr)
 {
     constexpr auto strsize = 512;
-    auto           dt_curr = std::time_t{std::time(nullptr)};
 
-    char mbstr[strsize];
+    if(!_dt_curr) _dt_curr = new std::time_t{std::time_t{std::time(nullptr)}};
+
+    char mbstr[strsize] = {};
     memset(mbstr, '\0', sizeof(mbstr) * sizeof(char));
 
-    if(std::strftime(mbstr, sizeof(mbstr) - 1, dt_format.c_str(), std::localtime(&dt_curr)) != 0)
+    if(std::strftime(mbstr, sizeof(mbstr) - 1, dt_format.c_str(), std::localtime(_dt_curr)) != 0)
         return new std::string{mbstr};
 
     return nullptr;
+}
+
+std::string
+get_hostname()
+{
+    auto _hostname_buff = std::array<char, PATH_MAX>{};
+    _hostname_buff.fill('\0');
+    if(gethostname(_hostname_buff.data(), _hostname_buff.size() - 1) != 0)
+    {
+        auto _err = errno;
+        ROCP_WARNING << "Hostname unknown. gethostname failed with error code " << _err << ": "
+                     << strerror(_err);
+        return std::string{"UNKNOWN_HOSTNAME"};
+    }
+
+    return std::string{_hostname_buff.data()};
 }
 
 inline bool
@@ -133,14 +173,6 @@ handle_special_chars(std::string& str)
 }
 
 bool
-has_kernel_name_format(std::string const& str)
-{
-    return std::find_if(str.begin(), str.end(), [](unsigned char ch) {
-               return (isalnum(ch) != 0 || ch == '_');
-           }) != str.end();
-}
-
-bool
 has_counter_format(std::string const& str)
 {
     return std::find_if(str.begin(), str.end(), [](unsigned char ch) {
@@ -149,34 +181,35 @@ has_counter_format(std::string const& str)
 }
 
 // validate kernel names
-auto
-parse_kernel_names(const std::string& line)
+std::unordered_set<uint32_t>
+get_kernel_filter_range(const std::string& kernel_filter)
 {
-    auto kernel_names_v = std::vector<std::string>{};
-    if(line.empty()) return kernel_names_v;
+    if(kernel_filter.empty()) return {};
 
-    auto kernel_names = std::set<std::string>{};
-    trim(line);
-    auto input_line  = std::stringstream{line};
-    auto kernel_name = std::string{};
-    while(getline(input_line, kernel_name, ','))
+    auto delim     = rocprofiler::sdk::parse::tokenize(kernel_filter, "[], ");
+    auto range_set = std::unordered_set<uint32_t>{};
+    for(const auto& itr : delim)
     {
-        if(has_kernel_name_format(kernel_name))
+        if(itr.find('-') != std::string::npos)
         {
-            ROCP_INFO << "kernel name " << kernel_names.size() << ": " << kernel_name;
-            kernel_names.emplace(kernel_name);
+            auto drange = rocprofiler::sdk::parse::tokenize(itr, "- ");
+
+            ROCP_FATAL_IF(drange.size() != 2)
+                << "bad range format for '" << itr << "'. Expected [A-B] where A and B are numbers";
+
+            uint32_t start_range = std::stoul(drange.front());
+            uint32_t end_range   = std::stoul(drange.back());
+            for(auto i = start_range; i <= end_range; i++)
+                range_set.emplace(i);
         }
         else
         {
-            ROCP_ERROR << "invalid kernel name: " << kernel_name;
+            ROCP_FATAL_IF(itr.find_first_not_of("0123456789") != std::string::npos)
+                << "expected integer for " << itr << ". Non-integer value detected";
+            range_set.emplace(std::stoul(itr));
         }
     }
-
-    kernel_names_v.reserve(kernel_names.size());
-    for(const auto& itr : kernel_names)
-        kernel_names_v.emplace_back(itr);
-
-    return kernel_names_v;
+    return range_set;
 }
 
 std::set<std::string>
@@ -240,47 +273,65 @@ get_mpi_rank()
 }
 
 config::config()
-: kernel_names{parse_kernel_names(get_env("ROCPROF_KERNEL_NAMES", std::string{}))}
+: kernel_filter_range{get_kernel_filter_range(
+      get_env("ROCPROF_KERNEL_FILTER_RANGE", std::string{}))}
 , counters{parse_counters(get_env("ROCPROF_COUNTERS", std::string{}))}
 {
+    auto to_upper = [](std::string val) {
+        for(auto& vitr : val)
+            vitr = toupper(vitr);
+        return val;
+    };
+
     auto output_format = get_env("ROCPROF_OUTPUT_FORMAT", "CSV");
-
-    for(auto& itr : output_format)
-        itr = toupper(itr);
-
-    for(auto itr : {',', ';', ':'})
-    {
-        auto pos = std::string::npos;
-        do
-        {
-            pos = output_format.find(itr);
-            if(pos != std::string::npos) output_format.replace(pos, 1, " ");
-        } while(pos != std::string::npos);
-    }
-
-    auto entries = std::set<std::string>{};
-    auto parser  = std::stringstream{output_format};
-
-    while(true)
-    {
-        auto _val = std::string{};
-        parser >> _val;
-        if(!_val.empty())
-            entries.emplace(_val);
-        else
-            break;
-    }
+    auto entries       = std::set<std::string>{};
+    for(const auto& itr : sdk::parse::tokenize(output_format, " \t,;:"))
+        entries.emplace(to_upper(itr));
 
     csv_output     = entries.count("CSV") > 0 || entries.empty();
     json_output    = entries.count("JSON") > 0;
     pftrace_output = entries.count("PFTRACE") > 0;
+    otf2_output    = entries.count("OTF2") > 0;
 
-    const auto supported_formats = std::set<std::string_view>{"CSV", "JSON", "PFTRACE"};
+    const auto supported_formats = std::set<std::string_view>{"CSV", "JSON", "PFTRACE", "OTF2"};
     for(const auto& itr : entries)
     {
         LOG_IF(FATAL, supported_formats.count(itr) == 0)
             << "Unsupported output format type: " << itr;
     }
+    if(kernel_filter_include.empty()) kernel_filter_include = std::string(".*");
+
+    const auto supported_perfetto_backends = std::set<std::string_view>{"inprocess", "system"};
+    LOG_IF(FATAL, supported_perfetto_backends.count(perfetto_backend) == 0)
+        << "Unsupported perfetto backend type: " << perfetto_backend;
+
+    if(stats_summary_unit == "sec")
+        stats_summary_unit_value = common::units::sec;
+    else if(stats_summary_unit == "msec")
+        stats_summary_unit_value = common::units::msec;
+    else if(stats_summary_unit == "usec")
+        stats_summary_unit_value = common::units::usec;
+    else if(stats_summary_unit == "nsec")
+        stats_summary_unit_value = common::units::nsec;
+    else
+    {
+        ROCP_FATAL << "Unsupported summary units value: " << stats_summary_unit;
+    }
+
+    if(auto _summary_grps = get_env("ROCPROF_STATS_SUMMARY_GROUPS", ""); !_summary_grps.empty())
+    {
+        stats_summary_groups =
+            sdk::parse::tokenize(_summary_grps, std::vector<std::string_view>{"##@@##"});
+
+        // remove any empty strings (just in case these slipped through)
+        stats_summary_groups.erase(std::remove_if(stats_summary_groups.begin(),
+                                                  stats_summary_groups.end(),
+                                                  [](const auto& itr) { return itr.empty(); }),
+                                   stats_summary_groups.end());
+    }
+
+    // enable summary output if any of these are enabled
+    summary_output = (stats_summary || stats_summary_per_domain || !stats_summary_groups.empty());
 }
 
 std::vector<output_key>
@@ -376,8 +427,10 @@ output_keys(std::string _tag)
     }
 
     auto _launch_time = (launch_datetime) ? *launch_datetime : std::string{".UNKNOWN_LAUNCH_TIME."};
+    auto _hostname    = get_hostname();
 
     for(auto&& itr : std::initializer_list<output_key>{
+            {"%hostname%", _hostname, "Network hostname"},
             {"%pid%", _proc_id, "Process identifier"},
             {"%ppid%", _parent_id, "Parent process identifier"},
             {"%pgid%", _pgroup_id, "Process group identifier"},
@@ -394,6 +447,7 @@ output_keys(std::string _tag)
     }
 
     for(auto&& itr : std::initializer_list<output_key>{
+            {"%h", _hostname, "Shorthand for %hostname%"},
             {"%p", _proc_id, "Shorthand for %pid%"},
             {"%j", _slurm_job_id, "Shorthand for %job%"},
             {"%r", _slurm_proc_id, "Shorthand for %rank%"},
@@ -406,8 +460,10 @@ output_keys(std::string _tag)
     return _options;
 }
 
+namespace
+{
 std::string
-format(std::string _fpath, const std::string& _tag)
+format_impl(std::string _fpath, const std::vector<output_key>& _keys)
 {
     if(_fpath.find('%') == std::string::npos && _fpath.find('$') == std::string::npos)
         return _fpath;
@@ -418,20 +474,36 @@ format(std::string _fpath, const std::string& _tag)
             _v.replace(pos, pitr.key.length(), pitr.value);
     };
 
-    for(auto&& itr : output_keys(_tag))
+    for(auto&& itr : _keys)
         _replace(_fpath, itr);
 
     // environment and configuration variables
     try
     {
+        auto strip_leading_and_replace =
+            [](std::string_view inp_v, std::initializer_list<char> keys, const char* val) {
+                auto inp = std::string{inp_v};
+                for(auto key : keys)
+                {
+                    auto pos = std::string::npos;
+                    while((pos = inp.find(key)) == 0)
+                        inp = inp.substr(pos + 1);
+
+                    while((pos = inp.find(key)) != std::string::npos)
+                        inp = inp.replace(pos, 1, val);
+                }
+                return inp;
+            };
+
         for(const auto& _re : *env_regexes)
         {
             while(std::regex_search(_fpath, _re))
             {
                 auto        _var = std::regex_replace(_fpath, _re, "$3");
                 std::string _val = get_env<std::string>(_var, "");
-                auto        _beg = std::regex_replace(_fpath, _re, "$1");
-                auto        _end = std::regex_replace(_fpath, _re, "$4");
+                _val             = strip_leading_and_replace(_val, {'\t', ' ', '/'}, "_");
+                auto _beg        = std::regex_replace(_fpath, _re, "$1");
+                auto _end        = std::regex_replace(_fpath, _re, "$4");
                 _fpath           = fmt::format("{}{}{}", _beg, _val, _end);
             }
         }
@@ -454,6 +526,25 @@ format(std::string _fpath, const std::string& _tag)
     }
 
     return _fpath;
+}
+
+std::string
+format(std::string _fpath, const std::vector<output_key>& _keys)
+{
+    if(_fpath.find('%') == std::string::npos && _fpath.find('$') == std::string::npos)
+        return _fpath;
+
+    auto _ref = _fpath;
+    _fpath    = format_impl(std::move(_fpath), _keys);
+
+    return (_fpath == _ref) ? _fpath : format(std::move(_fpath), _keys);
+}
+}  // namespace
+
+std::string
+format(std::string _fpath, const std::string& _tag)
+{
+    return format(std::move(_fpath), output_keys(_tag));
 }
 
 std::string

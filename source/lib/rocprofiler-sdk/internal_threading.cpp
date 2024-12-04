@@ -27,7 +27,6 @@
 #include "lib/common/container/stable_vector.hpp"
 #include "lib/common/static_object.hpp"
 #include "lib/common/utility.hpp"
-#include "lib/rocprofiler-sdk/allocator.hpp"
 #include "lib/rocprofiler-sdk/buffer.hpp"
 #include "lib/rocprofiler-sdk/context/context.hpp"
 #include "lib/rocprofiler-sdk/internal_threading.hpp"
@@ -122,7 +121,8 @@ using creation_notifier_cb_t = void (*)(rocprofiler_runtime_library_t, void*);
 constexpr auto creation_notifier_library_seq = library_sequence_t<ROCPROFILER_LIBRARY,
                                                                   ROCPROFILER_HSA_LIBRARY,
                                                                   ROCPROFILER_HIP_LIBRARY,
-                                                                  ROCPROFILER_MARKER_LIBRARY>{};
+                                                                  ROCPROFILER_MARKER_LIBRARY,
+                                                                  ROCPROFILER_RCCL_LIBRARY>{};
 
 // check that creation_notifier_library_seq is up to date
 static_assert((1 << (creation_notifier_library_seq.size() - 1)) == ROCPROFILER_LIBRARY_LAST,

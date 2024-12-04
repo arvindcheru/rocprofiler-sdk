@@ -148,6 +148,24 @@ typedef struct
 } rocprofiler_buffer_tracing_marker_api_record_t;
 
 /**
+ * @brief ROCProfiler Buffer RCCL API Record.
+ */
+typedef struct
+{
+    uint64_t                          size;  ///< size of this struct
+    rocprofiler_buffer_tracing_kind_t kind;
+    rocprofiler_tracing_operation_t   operation;
+    rocprofiler_correlation_id_t      correlation_id;   ///< correlation ids for record
+    rocprofiler_timestamp_t           start_timestamp;  ///< start time in nanoseconds
+    rocprofiler_timestamp_t           end_timestamp;    ///< end time in nanoseconds
+    rocprofiler_thread_id_t           thread_id;        ///< id for thread generating this record
+
+    /// @var kind
+    /// @brief ::ROCPROFILER_CALLBACK_TRACING_RCCL_API,
+    /// @brief Specification of the API function, e.g., ::rocprofiler_rccl_api_id_t,
+} rocprofiler_buffer_tracing_rccl_api_record_t;
+
+/**
  * @brief ROCProfiler Buffer Memory Copy Tracer Record.
  */
 typedef struct
@@ -301,7 +319,7 @@ typedef int (*rocprofiler_buffer_tracing_kind_cb_t)(rocprofiler_buffer_tracing_k
  */
 typedef int (*rocprofiler_buffer_tracing_kind_operation_cb_t)(
     rocprofiler_buffer_tracing_kind_t kind,
-    uint32_t                          operation,
+    rocprofiler_tracing_operation_t   operation,
     void*                             data);
 
 /**
@@ -324,10 +342,10 @@ typedef int (*rocprofiler_buffer_tracing_kind_operation_cb_t)(
  *
  */
 rocprofiler_status_t
-rocprofiler_configure_buffer_tracing_service(rocprofiler_context_id_t          context_id,
-                                             rocprofiler_buffer_tracing_kind_t kind,
-                                             rocprofiler_tracing_operation_t*  operations,
-                                             size_t                            operations_count,
+rocprofiler_configure_buffer_tracing_service(rocprofiler_context_id_t               context_id,
+                                             rocprofiler_buffer_tracing_kind_t      kind,
+                                             const rocprofiler_tracing_operation_t* operations,
+                                             size_t                  operations_count,
                                              rocprofiler_buffer_id_t buffer_id) ROCPROFILER_API;
 
 /**
@@ -374,7 +392,7 @@ rocprofiler_query_buffer_tracing_kind_name(rocprofiler_buffer_tracing_kind_t kin
  */
 rocprofiler_status_t
 rocprofiler_query_buffer_tracing_kind_operation_name(rocprofiler_buffer_tracing_kind_t kind,
-                                                     uint32_t                          operation,
+                                                     rocprofiler_tracing_operation_t   operation,
                                                      const char**                      name,
                                                      uint64_t* name_len) ROCPROFILER_API;
 

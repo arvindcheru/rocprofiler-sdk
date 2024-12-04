@@ -116,27 +116,20 @@ target_link_libraries(
     PRIVATE pc-sampling-integration-test-client Threads::Threads
             rocprofiler-sdk::tests-build-flags)
 
-# rocprofiler_pc-sampling-integration_get_preload_env(PRELOAD_ENV
-# pc-sampling-integration-test-client)
-# rocprofiler_pc-sampling-integration_get_ld_library_path_env(LIBRARY_PATH_ENV)
-
-# set(pc-sampling-integration-test-env ${PRELOAD_ENV} ${LIBRARY_PATH_ENV})
-
 add_test(NAME pc-sampling-integration-test
          COMMAND $<TARGET_FILE:pc-sampling-integration-test>)
 
+set(pc-sampling-integration-test-env "${ROCPROFILER_MEMCHECK_PRELOAD_ENV}")
+
 set_tests_properties(
     pc-sampling-integration-test
-    PROPERTIES
-        TIMEOUT
-        45
-        LABELS
-        "integration-tests;pc-sampling"
-        # ENVIRONMENT
-        # "${ROCPROFILER_MEMCHECK_PRELOAD_ENV};HSA_TOOLS_LIB=$<TARGET_FILE:rocprofiler::rocprofiler-shared-library>"
-        SKIP_REGULAR_EXPRESSION
-        "PC sampling unavailable"
-        ENVIRONMENT
-        "${pc-sampling-integration-test-env}"
-        FAIL_REGULAR_EXPRESSION
-        "${ROCPROFILER_DEFAULT_FAIL_REGEX}")
+    PROPERTIES TIMEOUT
+               45
+               LABELS
+               "integration-tests;pc-sampling"
+               SKIP_REGULAR_EXPRESSION
+               "PC sampling unavailable"
+               ENVIRONMENT
+               "${pc-sampling-integration-test-env}"
+               FAIL_REGULAR_EXPRESSION
+               "${ROCPROFILER_DEFAULT_FAIL_REGEX}")

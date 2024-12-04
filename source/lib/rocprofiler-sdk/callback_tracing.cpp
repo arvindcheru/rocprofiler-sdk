@@ -25,6 +25,7 @@
 #include <rocprofiler-sdk/hip/table_id.h>
 #include <rocprofiler-sdk/hsa/table_id.h>
 #include <rocprofiler-sdk/marker/table_id.h>
+#include <rocprofiler-sdk/rccl/table_id.h>
 #include <rocprofiler-sdk/rocprofiler.h>
 
 #include "lib/rocprofiler-sdk/code_object/code_object.hpp"
@@ -36,6 +37,7 @@
 #include "lib/rocprofiler-sdk/hsa/scratch_memory.hpp"
 #include "lib/rocprofiler-sdk/kernel_dispatch/kernel_dispatch.hpp"
 #include "lib/rocprofiler-sdk/marker/marker.hpp"
+#include "lib/rocprofiler-sdk/rccl/rccl.hpp"
 #include "lib/rocprofiler-sdk/registration.hpp"
 
 #include <atomic>
@@ -79,6 +81,7 @@ ROCPROFILER_CALLBACK_TRACING_KIND_STRING(CODE_OBJECT)
 ROCPROFILER_CALLBACK_TRACING_KIND_STRING(SCRATCH_MEMORY)
 ROCPROFILER_CALLBACK_TRACING_KIND_STRING(KERNEL_DISPATCH)
 ROCPROFILER_CALLBACK_TRACING_KIND_STRING(MEMORY_COPY)
+ROCPROFILER_CALLBACK_TRACING_KIND_STRING(RCCL_API)
 
 template <size_t Idx, size_t... Tail>
 std::pair<const char*, size_t>
@@ -89,21 +92,38 @@ get_kind_name(rocprofiler_callback_tracing_kind_t kind, std::index_sequence<Idx,
     if constexpr(sizeof...(Tail) > 0) return get_kind_name(kind, std::index_sequence<Tail...>{});
     return {nullptr, 0};
 }
+
+auto
+get_unsupported()
+{
+    auto unsupported = std::unordered_set<rocprofiler_callback_tracing_kind_t>{};
+
+    // #if ROCPROFILER_SDK_USE_SYSTEM_RCCL == 0
+    //     // Built against RCCL which does not support API tracing
+    //     unsupported.emplace(ROCPROFILER_CALLBACK_TRACING_RCCL_API);
+    // #endif
+
+    return unsupported;
+}
 }  // namespace
 }  // namespace callback_tracing
 }  // namespace rocprofiler
 
 extern "C" {
 rocprofiler_status_t
-rocprofiler_configure_callback_tracing_service(rocprofiler_context_id_t            context_id,
-                                               rocprofiler_callback_tracing_kind_t kind,
-                                               rocprofiler_tracing_operation_t*    operations,
-                                               size_t                              operations_count,
-                                               rocprofiler_callback_tracing_cb_t   callback,
-                                               void*                               callback_args)
+rocprofiler_configure_callback_tracing_service(rocprofiler_context_id_t               context_id,
+                                               rocprofiler_callback_tracing_kind_t    kind,
+                                               const rocprofiler_tracing_operation_t* operations,
+                                               size_t                            operations_count,
+                                               rocprofiler_callback_tracing_cb_t callback,
+                                               void*                             callback_args)
 {
+    static auto unsupported = ::rocprofiler::callback_tracing::get_unsupported();
+
     if(rocprofiler::registration::get_init_status() > -1)
         return ROCPROFILER_STATUS_ERROR_CONFIGURATION_LOCKED;
+
+    if(unsupported.count(kind) > 0) return ROCPROFILER_STATUS_ERROR_NOT_IMPLEMENTED;
 
     auto* ctx = rocprofiler::context::get_mutable_registered_context(context_id);
 
@@ -144,9 +164,9 @@ rocprofiler_query_callback_tracing_kind_name(rocprofiler_callback_tracing_kind_t
 
 rocprofiler_status_t
 rocprofiler_query_callback_tracing_kind_operation_name(rocprofiler_callback_tracing_kind_t kind,
-                                                       uint32_t     operation,
-                                                       const char** name,
-                                                       uint64_t*    name_len)
+                                                       rocprofiler_tracing_operation_t operation,
+                                                       const char**                    name,
+                                                       uint64_t*                       name_len)
 {
     if(kind < ROCPROFILER_CALLBACK_TRACING_NONE || kind >= ROCPROFILER_CALLBACK_TRACING_LAST)
         return ROCPROFILER_STATUS_ERROR_KIND_NOT_FOUND;
@@ -198,6 +218,11 @@ rocprofiler_query_callback_tracing_kind_operation_name(rocprofiler_callback_trac
         case ROCPROFILER_CALLBACK_TRACING_MARKER_NAME_API:
         {
             val = rocprofiler::marker::name_by_id<ROCPROFILER_MARKER_TABLE_ID_RoctxName>(operation);
+            break;
+        }
+        case ROCPROFILER_CALLBACK_TRACING_RCCL_API:
+        {
+            val = rocprofiler::rccl::name_by_id<ROCPROFILER_RCCL_TABLE_ID>(operation);
             break;
         }
         case ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API:
@@ -307,6 +332,11 @@ rocprofiler_iterate_callback_tracing_kind_operations(
         case ROCPROFILER_CALLBACK_TRACING_MARKER_NAME_API:
         {
             ops = rocprofiler::marker::get_ids<ROCPROFILER_MARKER_TABLE_ID_RoctxName>();
+            break;
+        }
+        case ROCPROFILER_CALLBACK_TRACING_RCCL_API:
+        {
+            ops = rocprofiler::rccl::get_ids<ROCPROFILER_RCCL_TABLE_ID>();
             break;
         }
         case ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API:
@@ -463,6 +493,7 @@ rocprofiler_iterate_callback_tracing_kind_operation_args(
         case ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT:
         case ROCPROFILER_CALLBACK_TRACING_KERNEL_DISPATCH:
         case ROCPROFILER_CALLBACK_TRACING_MEMORY_COPY:
+        case ROCPROFILER_CALLBACK_TRACING_RCCL_API:
         {
             return ROCPROFILER_STATUS_ERROR_NOT_IMPLEMENTED;
         }

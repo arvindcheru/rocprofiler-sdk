@@ -20,10 +20,10 @@ target_include_directories(
 target_link_libraries(
     rocprofiler-sdk-roctx-shared-library
     PRIVATE rocprofiler-register::rocprofiler-register
-            rocprofiler-sdk::rocprofiler-headers
-            rocprofiler-sdk::rocprofiler-build-flags
-            rocprofiler-sdk::rocprofiler-memcheck
-            rocprofiler-sdk::rocprofiler-common-library)
+            rocprofiler-sdk::rocprofiler-sdk-headers
+            rocprofiler-sdk::rocprofiler-sdk-build-flags
+            rocprofiler-sdk::rocprofiler-sdk-memcheck
+            rocprofiler-sdk::rocprofiler-sdk-common-library)
 
 set_target_properties(
     rocprofiler-sdk-roctx-shared-library
@@ -34,7 +34,7 @@ set_target_properties(
                SKIP_BUILD_RPATH OFF
                BUILD_RPATH "\$ORIGIN"
                INSTALL_RPATH "\$ORIGIN"
-               DEFINE_SYMBOL rocprofiler_EXPORTS)
+               DEFINE_SYMBOL roctx_EXPORTS)
 
 install(
     TARGETS rocprofiler-sdk-roctx-shared-library

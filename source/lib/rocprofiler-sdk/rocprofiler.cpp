@@ -55,6 +55,8 @@ ROCPROFILER_STATUS_STRING(ROCPROFILER_STATUS_ERROR_CONTEXT_INVALID,
 ROCPROFILER_STATUS_STRING(ROCPROFILER_STATUS_ERROR_CONTEXT_NOT_STARTED, "Context failed to start")
 ROCPROFILER_STATUS_STRING(ROCPROFILER_STATUS_ERROR_CONTEXT_CONFLICT,
                           "Context has a conflict with another context")
+ROCPROFILER_STATUS_STRING(ROCPROFILER_STATUS_ERROR_CONTEXT_ID_NOT_ZERO,
+                          "Context ID should be initialized to zero")
 ROCPROFILER_STATUS_STRING(
     ROCPROFILER_STATUS_ERROR_BUFFER_BUSY,
     "Buffer operation failed because it is currently busy handling another request")
@@ -112,6 +114,8 @@ ROCPROFILER_STATUS_STRING(ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE,
                           "this status code for more information.")
 ROCPROFILER_STATUS_STRING(ROCPROFILER_STATUS_ERROR_EXCEEDS_HW_LIMIT,
                           "Request exceeds the capabilities of the hardware to collect")
+ROCPROFILER_STATUS_STRING(ROCPROFILER_STATUS_ERROR_AGENT_ARCH_NOT_SUPPORTED,
+                          "Agent HW architecture is not supported, no counter metrics found.")
 
 template <size_t Idx, size_t... Tail>
 const char*

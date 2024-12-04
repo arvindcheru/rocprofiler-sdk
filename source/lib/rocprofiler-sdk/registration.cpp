@@ -23,7 +23,9 @@
 #define _GNU_SOURCE 1
 
 #include "lib/rocprofiler-sdk/registration.hpp"
+#include "lib/common/elf_utils.hpp"
 #include "lib/common/environment.hpp"
+#include "lib/common/filesystem.hpp"
 #include "lib/common/logging.hpp"
 #include "lib/common/static_object.hpp"
 #include "lib/rocprofiler-sdk/agent.hpp"
@@ -41,6 +43,7 @@
 #include "lib/rocprofiler-sdk/page_migration/page_migration.hpp"
 #include "lib/rocprofiler-sdk/pc_sampling/code_object.hpp"
 #include "lib/rocprofiler-sdk/pc_sampling/service.hpp"
+#include "lib/rocprofiler-sdk/rccl/rccl.hpp"
 
 #include <rocprofiler-sdk/context.h>
 #include <rocprofiler-sdk/fwd.h>
@@ -88,6 +91,8 @@ namespace registration
 {
 namespace
 {
+namespace fs = ::rocprofiler::common::filesystem;
+
 // invoke all rocprofiler_configure symbols
 bool
 invoke_client_configures();
@@ -129,8 +134,7 @@ std::vector<std::string>
 get_link_map()
 {
     auto  chain  = std::vector<std::string>{};
-    void* handle = nullptr;
-    handle       = dlopen(nullptr, RTLD_LAZY | RTLD_NOLOAD);
+    void* handle = dlopen(nullptr, RTLD_LAZY | RTLD_NOLOAD);
 
     if(handle)
     {
@@ -243,21 +247,31 @@ find_clients()
     {
         for(const auto& itr : env)
         {
-            ROCP_INFO << "[env] searching " << itr << " for rocprofiler_configure";
+            ROCP_INFO << "[ROCP_TOOL_LIBRARIES] searching " << itr << " for rocprofiler_configure";
+
+            if(fs::exists(itr))
+            {
+                auto elfinfo = common::elf_utils::read(itr);
+                if(!elfinfo.has_symbol(std::regex{"^rocprofiler_configure$"}))
+                {
+                    ROCP_FATAL << "[ROCP_TOOL_LIBRARIES] rocprofiler-sdk tool library '" << itr
+                               << "' did not contain rocprofiler_configure symbol (search method: "
+                                  "ELF parsing)";
+                }
+            }
 
             void* handle = dlopen(itr.c_str(), RTLD_NOLOAD | RTLD_LAZY);
 
             if(!handle)
             {
-                ROCP_WARNING << "[env] " << itr
-                             << " is not already loaded, doing a local lazy dlopen...";
+                ROCP_INFO << "[ROCP_TOOL_LIBRARIES] '" << itr
+                          << "' is not already loaded, doing a local lazy dlopen...";
                 handle = dlopen(itr.c_str(), RTLD_LOCAL | RTLD_LAZY);
             }
 
             if(!handle)
             {
-                ROCP_ERROR << "error dlopening " << itr;
-                continue;
+                ROCP_FATAL << "[ROCP_TOOL_LIBRARIES] error dlopening '" << itr << "'";
             }
 
             for(const auto& ditr : data)
@@ -273,8 +287,9 @@ find_clients()
             {
                 auto _sym = rocprofiler_configure_dlsym(handle);
                 // FATAL bc they explicitly said this was a tool library
-                ROCP_FATAL_IF(!_sym) << "rocprofiler tool library " << itr
-                                     << " did not contain rocprofiler_configure symbol";
+                ROCP_FATAL_IF(!_sym)
+                    << "[ROCP_TOOL_LIBRARIES] rocprofiler-sdk tool library '" << itr
+                    << "' did not contain rocprofiler_configure symbol (search method: dlsym)";
                 if(is_unique_configure_func(_sym)) emplace_client(itr, handle, _sym);
             }
         }
@@ -294,11 +309,23 @@ find_clients()
 
     // if there are two "rocprofiler_configures", we need to trigger a search of all the shared
     // libraries
-    if(_next_configure)
+    if(_default_configure)
     {
         for(const auto& itr : get_link_map())
         {
             ROCP_INFO << "searching " << itr << " for rocprofiler_configure";
+
+            if(fs::exists(itr))
+            {
+                auto elfinfo = common::elf_utils::read(itr);
+                if(!elfinfo.has_symbol(std::regex{"^rocprofiler_configure$"})) continue;
+            }
+            else
+            {
+                continue;
+            }
+
+            ROCP_INFO << "dlopening " << itr << " for rocprofiler_configure";
 
             void* handle = dlopen(itr.c_str(), RTLD_LAZY | RTLD_NOLOAD);
             ROCP_ERROR_IF(handle == nullptr) << "error dlopening " << itr;
@@ -604,7 +631,9 @@ finalize()
     std::call_once(_once, []() {
         set_fini_status(-1);
         hsa::async_copy_fini();
+        counters::device_counting_service_finalize();
         hsa::queue_controller_fini();
+        thread_trace::finalize();
         page_migration::finalize();
 #if ROCPROFILER_SDK_HSA_PC_SAMPLING > 0
         // WARNING: this must precede `code_object::finalize()`
@@ -680,7 +709,7 @@ rocprofiler_set_api_table(const char* name,
     static auto _once = std::once_flag{};
     std::call_once(_once, rocprofiler::registration::initialize);
 
-    // pass to roctx init
+    // pass to ROCTx init
     ROCP_ERROR_IF(num_tables == 0) << "rocprofiler expected " << name
                                    << " library to pass at least one table, not " << num_tables;
     ROCP_ERROR_IF(tables == nullptr) << "rocprofiler expected pointer to array of tables from "
@@ -758,11 +787,11 @@ rocprofiler_set_api_table(const char* name,
         rocprofiler::agent::construct_agent_cache(hsa_api_table);
         rocprofiler::hsa::queue_controller_init(hsa_api_table);
         // Process agent ctx's that were started prior to HSA init
-        rocprofiler::counters::agent_profile_hsa_registration();
+        rocprofiler::counters::device_counting_service_hsa_registration();
 
         rocprofiler::hsa::async_copy_init(hsa_api_table, lib_instance);
         rocprofiler::code_object::initialize(hsa_api_table);
-        rocprofiler::thread_trace::code_object::initialize(hsa_api_table);
+        rocprofiler::thread_trace::initialize(hsa_api_table);
 #if ROCPROFILER_SDK_HSA_PC_SAMPLING > 0
         rocprofiler::pc_sampling::code_object::initialize(hsa_api_table);
 #endif
@@ -785,7 +814,7 @@ rocprofiler_set_api_table(const char* name,
     }
     else if(std::string_view{name} == "roctx")
     {
-        // pass to roctx init
+        // pass to ROCTx init
         ROCP_FATAL_IF(num_tables < 3)
             << "rocprofiler expected ROCTX library to pass 3 API tables, not " << num_tables;
         ROCP_ERROR_IF(num_tables > 3)
@@ -819,6 +848,25 @@ rocprofiler_set_api_table(const char* name,
         rocprofiler::intercept_table::notify_intercept_table_registration(
             ROCPROFILER_MARKER_NAME_TABLE, lib_version, lib_instance, std::make_tuple(roctx_name));
     }
+    else if(std::string_view{name} == "rccl")
+    {
+        // pass to rccl init
+        ROCP_ERROR_IF(num_tables > 1)
+            << "rocprofiler expected RCCL library to pass 1 API table, not " << num_tables;
+
+        auto* rccl_api = static_cast<rcclApiFuncTable*>(tables[0]);
+
+        // any internal modifications to the rcclApiFuncTable need to be done before we make the
+        // copy or else those modifications will be lost when RCCL API tracing is enabled
+        // because the RCCL API tracing invokes the function pointers from the copy below
+        rocprofiler::rccl::copy_table(rccl_api, lib_instance);
+
+        // install rocprofiler API wrappers
+        rocprofiler::rccl::update_table(rccl_api);
+
+        rocprofiler::intercept_table::notify_intercept_table_registration(
+            ROCPROFILER_RCCL_TABLE, lib_version, lib_instance, std::make_tuple(rccl_api));
+    }
     else
     {
         ROCP_ERROR << "rocprofiler does not accept API tables from " << name;
@@ -833,34 +881,4 @@ rocprofiler_set_api_table(const char* name,
 
     return 0;
 }
-
-// #if 0
-bool
-OnLoad(HsaApiTable*       table,
-       uint64_t           runtime_version,
-       uint64_t           failed_tool_count,
-       const char* const* failed_tool_names)
-{
-    rocprofiler::registration::init_logging();
-
-    (void) runtime_version;
-    (void) failed_tool_count;
-    (void) failed_tool_names;
-
-    fprintf(stderr, "[%s:%i] %s\n", __FILE__, __LINE__, __FUNCTION__);
-
-    void* table_v = static_cast<void*>(table);
-    rocprofiler_set_api_table("hsa", runtime_version, 0, &table_v, 1);
-
-    return true;
-}
-
-void
-OnUnload()
-{
-    ROCP_INFO << "Unloading hsa-runtime...";
-    ::rocprofiler::registration::finalize();
-    ROCP_INFO << "Finalization complete.";
-}
-// #endif
 }

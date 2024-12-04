@@ -68,6 +68,7 @@ typedef enum  // NOLINT(performance-enum-size)
                                                    ///< into active array failed)
     ROCPROFILER_STATUS_ERROR_CONTEXT_CONFLICT,  ///< Context operation failed due to a conflict with
                                                 ///< another context
+    ROCPROFILER_STATUS_ERROR_CONTEXT_ID_NOT_ZERO,  ///< Context ID is not initialized to zero
     ROCPROFILER_STATUS_ERROR_BUFFER_BUSY,  ///< buffer operation failed because it currently busy
                                            ///< handling another request (e.g. flushing)
     ROCPROFILER_STATUS_ERROR_SERVICE_ALREADY_CONFIGURED,  ///< service has already been configured
@@ -105,7 +106,8 @@ typedef enum  // NOLINT(performance-enum-size)
     ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE,         ///< The service is not available.
                                              ///< Please refer to API functions that return this
                                              ///< status code for more information.
-    ROCPROFILER_STATUS_ERROR_EXCEEDS_HW_LIMIT,  ///< Exceeds hardware limits for collection
+    ROCPROFILER_STATUS_ERROR_EXCEEDS_HW_LIMIT,          ///< Exceeds hardware limits for collection.
+    ROCPROFILER_STATUS_ERROR_AGENT_ARCH_NOT_SUPPORTED,  ///< Agent HW architecture not supported.
     ROCPROFILER_STATUS_LAST,
 } rocprofiler_status_t;
 
@@ -169,6 +171,7 @@ typedef enum  // NOLINT(performance-enum-size)
     ROCPROFILER_CALLBACK_TRACING_SCRATCH_MEMORY,  ///< @see ::rocprofiler_scratch_memory_operation_t
     ROCPROFILER_CALLBACK_TRACING_KERNEL_DISPATCH,  ///< Callbacks for kernel dispatches
     ROCPROFILER_CALLBACK_TRACING_MEMORY_COPY,      ///< @see ::rocprofiler_memory_copy_operation_t
+    ROCPROFILER_CALLBACK_TRACING_RCCL_API,         ///< @RCCL tracing
     ROCPROFILER_CALLBACK_TRACING_LAST,
 } rocprofiler_callback_tracing_kind_t;
 
@@ -193,6 +196,7 @@ typedef enum  // NOLINT(performance-enum-size)
     ROCPROFILER_BUFFER_TRACING_PAGE_MIGRATION,      ///< Buffer page migration info
     ROCPROFILER_BUFFER_TRACING_SCRATCH_MEMORY,      ///< Buffer scratch memory reclaimation info
     ROCPROFILER_BUFFER_TRACING_CORRELATION_ID_RETIREMENT,  ///< Correlation ID in no longer in use
+    ROCPROFILER_BUFFER_TRACING_RCCL_API,                   ///< RCCL tracing
     ROCPROFILER_BUFFER_TRACING_LAST,
 } rocprofiler_buffer_tracing_kind_t;
 
@@ -350,7 +354,8 @@ typedef enum
     ROCPROFILER_HSA_LIBRARY    = (1 << 1),
     ROCPROFILER_HIP_LIBRARY    = (1 << 2),
     ROCPROFILER_MARKER_LIBRARY = (1 << 3),
-    ROCPROFILER_LIBRARY_LAST   = ROCPROFILER_MARKER_LIBRARY,
+    ROCPROFILER_RCCL_LIBRARY   = (1 << 4),
+    ROCPROFILER_LIBRARY_LAST   = ROCPROFILER_RCCL_LIBRARY,
 } rocprofiler_runtime_library_t;
 
 /**
@@ -365,7 +370,8 @@ typedef enum
     ROCPROFILER_MARKER_CORE_TABLE    = (1 << 3),
     ROCPROFILER_MARKER_CONTROL_TABLE = (1 << 4),
     ROCPROFILER_MARKER_NAME_TABLE    = (1 << 5),
-    ROCPROFILER_TABLE_LAST           = ROCPROFILER_MARKER_NAME_TABLE,
+    ROCPROFILER_RCCL_TABLE           = (1 << 6),
+    ROCPROFILER_TABLE_LAST           = ROCPROFILER_RCCL_TABLE,
 } rocprofiler_intercept_table_t;
 
 /**
@@ -385,13 +391,13 @@ typedef enum
 typedef enum
 {
     ROCPROFILER_COUNTER_RECORD_NONE = 0,
-    ROCPROFILER_COUNTER_RECORD_PROFILE_COUNTING_DISPATCH_HEADER,  ///< ::rocprofiler_profile_counting_dispatch_record_t
+    ROCPROFILER_COUNTER_RECORD_PROFILE_COUNTING_DISPATCH_HEADER,  ///< ::rocprofiler_dispatch_counting_service_record_t
     ROCPROFILER_COUNTER_RECORD_VALUE,
     ROCPROFILER_COUNTER_RECORD_LAST,
 
     /// @var ROCPROFILER_COUNTER_RECORD_KIND_DISPATCH_PROFILE_HEADER
     /// @brief Indicates the payload type is of type
-    /// ::rocprofiler_profile_counting_dispatch_record_t
+    /// ::rocprofiler_dispatch_counting_service_record_t
 } rocprofiler_counter_record_kind_t;
 
 /**
@@ -411,9 +417,7 @@ typedef enum
 typedef enum
 {
     ROCPROFILER_PC_SAMPLING_RECORD_NONE = 0,
-    ROCPROFILER_PC_SAMPLING_RECORD_SAMPLE,                   ///< ::rocprofiler_pc_sampling_record_t
-    ROCPROFILER_PC_SAMPLING_RECORD_CODE_OBJECT_LOAD_MARKER,  ///< ::rocprofiler_pc_sampling_code_object_load_marker_t
-    ROCPROFILER_PC_SAMPLING_RECORD_CODE_OBJECT_UNLOAD_MARKER,  ///< ::rocprofiler_pc_sampling_code_object_unload_marker_t
+    ROCPROFILER_PC_SAMPLING_RECORD_SAMPLE,  ///< ::rocprofiler_pc_sampling_record_t
     ROCPROFILER_PC_SAMPLING_RECORD_LAST,
 } rocprofiler_pc_sampling_record_kind_t;
 
@@ -445,7 +449,7 @@ typedef uint64_t rocprofiler_thread_id_t;
  * for that partiular operation. i.e: For ROCProfiler enumeration of HSA AMD Extended API tracing
  * operations, look at source/include/rocprofiler-sdk/hsa/amd_ext_api_id.h
  */
-typedef uint32_t rocprofiler_tracing_operation_t;
+typedef int32_t rocprofiler_tracing_operation_t;
 
 /**
  * @brief Kernel identifier type
@@ -579,7 +583,7 @@ typedef struct rocprofiler_callback_tracing_record_t
     rocprofiler_thread_id_t             thread_id;
     rocprofiler_correlation_id_t        correlation_id;
     rocprofiler_callback_tracing_kind_t kind;
-    uint32_t                            operation;
+    rocprofiler_tracing_operation_t     operation;
     rocprofiler_callback_phase_t        phase;
     void*                               payload;
 } rocprofiler_callback_tracing_record_t;
@@ -685,15 +689,16 @@ typedef struct
     double                            counter_value;  ///< counter value
     rocprofiler_dispatch_id_t         dispatch_id;
     rocprofiler_user_data_t           user_data;
+    rocprofiler_agent_id_t            agent_id;
 
     /// @var dispatch_id
     /// @brief A value greater than zero indicates that this counter record is associated with a
     /// specific dispatch.
     ///
     /// This value can be mapped to a dispatch via the `dispatch_info` field (@see
-    /// ::rocprofiler_kernel_dispatch_info_t) of a ::rocprofiler_profile_counting_dispatch_data_t
+    /// ::rocprofiler_kernel_dispatch_info_t) of a ::rocprofiler_dispatch_counting_service_data_t
     /// instance (provided during callback for profile config) or a
-    /// ::rocprofiler_profile_counting_dispatch_record_t records (which will be insert into the
+    /// ::rocprofiler_dispatch_counting_service_record_t records (which will be insert into the
     /// buffer prior to the associated ::rocprofiler_record_counter_t records).
 } rocprofiler_record_counter_t;
 

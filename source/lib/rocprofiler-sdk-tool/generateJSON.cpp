@@ -24,6 +24,10 @@
 #include "config.hpp"
 #include "helper.hpp"
 #include "output_file.hpp"
+#include "statistics.hpp"
+
+#include "lib/common/string_entry.hpp"
+#include "lib/common/utility.hpp"
 
 #include <rocprofiler-sdk/fwd.h>
 #include <rocprofiler-sdk/marker/api_id.h>
@@ -37,6 +41,7 @@ namespace tool
 void
 write_json(tool_table*                                                      tool_functions,
            uint64_t                                                         pid,
+           const domain_stats_vec_t&                                        domain_stats,
            std::vector<rocprofiler_agent_v0_t>                              agent_data,
            std::vector<rocprofiler_tool_counter_info_t>                     counter_data,
            std::deque<rocprofiler_buffer_tracing_hip_api_record_t>*         hip_api_deque,
@@ -45,19 +50,20 @@ write_json(tool_table*                                                      tool
            std::deque<rocprofiler_buffer_tracing_memory_copy_record_t>*     memory_copy_deque,
            std::deque<rocprofiler_tool_counter_collection_record_t>*       counter_collection_deque,
            std::deque<rocprofiler_buffer_tracing_marker_api_record_t>*     marker_api_deque,
-           std::deque<rocprofiler_buffer_tracing_scratch_memory_record_t>* scratch_memory_deque)
+           std::deque<rocprofiler_buffer_tracing_scratch_memory_record_t>* scratch_memory_deque,
+           std::deque<rocprofiler_buffer_tracing_rccl_api_record_t>*       rccl_api_deque)
 
 {
     using JSONOutputArchive = cereal::MinimalJSONOutputArchive;
 
-    constexpr auto json_prec      = 32;
-    constexpr auto json_indent    = JSONOutputArchive::Options::IndentChar::space;
-    auto           json_opts      = JSONOutputArchive::Options{json_prec, json_indent, 1};
-    auto           filename       = std::string_view{"results"};
-    auto [output_stream, cleanup] = get_output_stream(filename, ".json");
+    constexpr auto json_prec   = 32;
+    constexpr auto json_indent = JSONOutputArchive::Options::IndentChar::space;
+    auto           json_opts   = JSONOutputArchive::Options{json_prec, json_indent, 1};
+    auto           filename    = std::string_view{"results"};
+    auto           ofs         = get_output_stream(filename, ".json");
 
     {
-        auto json_ar = JSONOutputArchive{*output_stream, json_opts};
+        auto json_ar = JSONOutputArchive{*ofs.stream, json_opts};
         json_ar.setNextName("rocprofiler-sdk-tool");
         json_ar.startNode();
 
@@ -72,6 +78,29 @@ write_json(tool_table*                                                      tool
             json_ar(cereal::make_nvp("pid", pid));
             json_ar(cereal::make_nvp("init_time", timestamps->app_start_time));
             json_ar(cereal::make_nvp("fini_time", timestamps->app_end_time));
+            json_ar(cereal::make_nvp("config", get_config()));
+            json_ar(cereal::make_nvp("command", common::read_command_line(getpid())));
+            json_ar.finishNode();
+        }
+
+        // summary
+        {
+            json_ar.setNextName("summary");
+            json_ar.startNode();
+            json_ar.makeArray();
+
+            for(const auto& itr : domain_stats)
+            {
+                auto _name = get_domain_column_name(itr.first);
+                json_ar.startNode();
+
+                json_ar(cereal::make_nvp("domain", std::string{_name}));
+                json_ar(cereal::make_nvp("stats", itr.second));
+                // itr.second.serialize(json_ar, 0);
+
+                json_ar.finishNode();
+            }
+
             json_ar.finishNode();
         }
 
@@ -89,6 +118,27 @@ write_json(tool_table*                                                      tool
             json_ar(cereal::make_nvp("callback_records", callback_name_info));
             json_ar(cereal::make_nvp("buffer_records", buffer_name_info));
             json_ar(cereal::make_nvp("marker_api", marker_msg_data));
+
+            {
+                auto _extern_corr_id_strings = std::map<size_t, std::string>{};
+                if(tool::get_config().kernel_rename)
+                {
+                    for(auto itr : *kernel_dispatch_deque)
+                    {
+                        auto _value = itr.correlation_id.external.value;
+                        if(_value > 0)
+                        {
+                            const auto* _str = common::get_string_entry(_value);
+                            if(_str) _extern_corr_id_strings.emplace(_value, *_str);
+                        }
+                    }
+                }
+
+                json_ar.setNextName("correlation_id");
+                json_ar.startNode();
+                json_ar(cereal::make_nvp("external", _extern_corr_id_strings));
+                json_ar.finishNode();
+            }
 
             {
                 json_ar.setNextName("counters");
@@ -122,6 +172,7 @@ write_json(tool_table*                                                      tool
             json_ar(cereal::make_nvp("hip_api", *hip_api_deque));
             json_ar(cereal::make_nvp("hsa_api", *hsa_api_deque));
             json_ar(cereal::make_nvp("marker_api", *marker_api_deque));
+            json_ar(cereal::make_nvp("rccl_api", *rccl_api_deque));
             json_ar(cereal::make_nvp("memory_copy", *memory_copy_deque));
             json_ar(cereal::make_nvp("scratch_memory", *scratch_memory_deque));
             json_ar.finishNode();
@@ -131,8 +182,7 @@ write_json(tool_table*                                                      tool
         json_ar.finishNode();
     }
 
-    *output_stream << std::flush;
-    if(cleanup) cleanup(output_stream);
+    ofs.close();
 }
 
 }  // namespace tool

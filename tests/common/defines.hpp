@@ -38,3 +38,11 @@
             throw std::runtime_error(errmsg.str());                                                \
         }                                                                                          \
     }
+
+#if HIP_VERSION >= 60300000
+#    define HIP_HOST_ALLOC_FUNC hipHostMalloc
+#    define HIP_HOST_FREE_FUNC  hipHostFree
+#else
+#    define HIP_HOST_ALLOC_FUNC hipHostMalloc
+#    define HIP_HOST_FREE_FUNC  hipHostFree
+#endif

@@ -48,3 +48,54 @@ def test_perfetto_data(
         assert len(_pf_data) == len(
             _js_data
         ), f"{pf_category} ({len(_pf_data)}):\n\t{_pf_data}\n{js_category} ({len(_js_data)}):\n\t{_js_data}"
+
+
+def test_otf2_data(
+    otf2_data, json_data, categories=("hip", "hsa", "marker", "kernel", "memory_copy")
+):
+
+    def get_operation_name(kind_id, op_id):
+        return json_data["rocprofiler-sdk-tool"]["strings"]["buffer_records"][kind_id][
+            "operations"
+        ][op_id]
+
+    def get_kind_name(kind_id):
+        return json_data["rocprofiler-sdk-tool"]["strings"]["buffer_records"][kind_id][
+            "kind"
+        ]
+
+    mapping = {
+        "hip": ("hip_api", "hip_api"),
+        "hsa": ("hsa_api", "hsa_api"),
+        "marker": ("marker_api", "marker_api"),
+        "kernel": ("kernel_dispatch", "kernel_dispatch"),
+        "memory_copy": ("memory_copy", "memory_copy"),
+    }
+
+    # make sure they specified valid categories
+    for itr in categories:
+        assert itr in mapping.keys()
+
+    for otf2_category, json_category in [
+        itr for key, itr in mapping.items() if key in categories
+    ]:
+        _otf2_data = otf2_data.loc[otf2_data["category"] == otf2_category]
+        _json_data = json_data["rocprofiler-sdk-tool"]["buffer_records"][json_category]
+
+        # we do not encode the roctxMark "regions" in OTF2 because
+        # they don't map to the OTF2_REGION_ROLE_FUNCTION well
+        if json_category == "marker_api":
+
+            def roctx_mark_filter(val):
+                return (
+                    None
+                    if get_kind_name(val.kind) == "MARKER_CORE_API"
+                    and get_operation_name(val.kind, val.operation) == "roctxMarkA"
+                    else val
+                )
+
+            _json_data = [itr for itr in _json_data if roctx_mark_filter(itr) is not None]
+
+        assert len(_otf2_data) == len(
+            _json_data
+        ), f"{otf2_category} ({len(_otf2_data)}):\n\t{_otf2_data}\n{json_category} ({len(_json_data)}):\n\t{_json_data}"

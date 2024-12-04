@@ -31,51 +31,61 @@
 // Layout is: {name, block, event, expression, description}.
 static const std::unordered_map<std::string, std::vector<std::vector<std::string>>> basic_gfx908 = {
     {"gfx908",
-     {{"MAX_WAVE_SIZE", "", "", "1", "Max wave size constant"},
-      {"SE_NUM", "", "", "1", "SE_NUM"},
-      {"SIMD_NUM", "", "", "1", "SIMD Number"},
-      {"CU_NUM", "", "", "1", "CU_NUM"},
-      {"SQ_INSTS_VMEM_WR",
+     {{"SQ_INSTS_VMEM_WR",
        "SQ",
        "28",
        "<None>",
-       "Number of VMEM write instructions issued (including FLAT). (per-simd, emulated)"},
+       "The number of VMEM (GPU Memory) write instructions issued (including FLAT/scratch memory). "
+       "The value is returned per-SE (aggregate of values in SIMDs in the SE)."},
       {"SQ_INSTS_VMEM_RD",
        "SQ",
        "29",
        "<None>",
-       "Number of VMEM read instructions issued (including FLAT). (per-simd, emulated)"},
+       "The number of VMEM (GPU Memory) read instructions issued (including FLAT/scratch memory). "
+       "The value is returned per-SE (aggregate of values in SIMDs in the SE)."},
       {"SQ_INSTS_SALU",
        "SQ",
        "31",
        "<None>",
-       "Number of SALU instructions issued. (per-simd, emulated)"},
+       "Total Number of SALU (Scalar ALU) instructions issued. This value is returned per-SE "
+       "(aggregate of values in SIMDs in the SE). See AMD ISAs for more information on SALU "
+       "instructions."},
       {"SQ_INSTS_SMEM",
        "SQ",
        "32",
        "<None>",
-       "Number of SMEM instructions issued. (per-simd, emulated)"},
+       "Total number of SMEM (Scalar Memory Read) instructions issued. This value is returned "
+       "per-SE (aggregate of values in SIMDs in the SE). See AMD ISAs for more information on SMEM "
+       "instructions."},
       {"SQ_INSTS_FLAT",
        "SQ",
        "33",
        "<None>",
-       "Number of FLAT instructions issued. (per-simd, emulated)"},
+       "Total number of FLAT instructions issued. When used in combination with "
+       "SQ_ACTIVE_INST_FLAT (cycle count for executing instructions) the average latency of FLAT "
+       "instruction execution can be calculated (SQ_ACTIVE_INST_FLAT / SQ_INSTS). This value is "
+       "returned per-SE (aggregate of values in SIMDs in the SE)."},
       {"SQ_INSTS_FLAT_LDS_ONLY",
        "SQ",
        "34",
        "<None>",
-       "Number of FLAT instructions issued that read/wrote only from/to LDS (only works if "
-       "EARLY_TA_DONE is enabled). (per-simd, emulated)"},
+       "Total number of FLAT instructions issued that read/wrote only from/to LDS (scratch "
+       "memory). Values are only populated if EARLY_TA_DONE is enabled. This value is returned "
+       "per-SE (aggregate of values in SIMDs in the SE)."},
       {"SQ_INSTS_LDS",
        "SQ",
        "35",
        "<None>",
-       "Number of LDS instructions issued (including FLAT). (per-simd, emulated)"},
+       "Total number of LDS instructions issued (including FLAT). This value is returned per-SE "
+       "(aggregate of values in SIMDs in the SE). See AMD ISAs for more information on LDS "
+       "instructions."},
       {"SQ_INSTS_GDS",
        "SQ",
        "36",
        "<None>",
-       "Number of GDS instructions issued. (per-simd, emulated)"},
+       "Total number of GDS (global data sync) instructions issued. This value is returned per-SE "
+       "(aggregate of values in SIMDs in the SE). See AMD ISAs for more information on GDS (global "
+       "data sync) instructions."},
       {"SQ_WAIT_INST_LDS",
        "SQ",
        "64",
@@ -86,14 +96,18 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
        "SQ",
        "72",
        "<None>",
-       "regspec 71? Number of cycles the SQ instruction arbiter is working on a VALU instruction. "
-       "(per-simd, nondeterministic). Units in quad-cycles(4 cycles)"},
+       "Number of cycles each wave spends working on a VALU instructions. This value represents "
+       "the number of cycles each wave spends executing vector ALU instructions. On MI200 "
+       "platforms, there are 4 VALUs per CU. High values indicates a large amount of time spent "
+       "executing vector instructions. This value is returned on a per-SE (aggregate of values in "
+       "SIMDs in the SE) basis with units in quad-cycles(4 cycles)."},
       {"SQ_INST_CYCLES_SALU",
        "SQ",
        "85",
        "<None>",
-       "Number of cycles needed to execute non-memory read scalar operations. (per-simd, "
-       "emulated)"},
+       "The number of cycles needed to execute non-memory read scalar operations (SALU). This "
+       "value is returned on a per-SE (aggregate of values in SIMDs in the SE) basis with units in "
+       "quad-cycles(4 cycles)."},
       {"SQ_THREAD_CYCLES_VALU",
        "SQ",
        "86",
@@ -104,7 +118,8 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
        "SQ",
        "94",
        "<None>",
-       "Number of cycles LDS is stalled by bank conflicts. (emulated)"},
+       "The number of cycles LDS (local data store) is stalled by bank conflicts. This value is "
+       "returned on a per-SE (aggregate of values in SIMDs in the SE) basis."},
       {"TCC_HIT", "TCC", "17", "<None>", "Number of cache hits."},
       {"TCC_MISS", "TCC", "19", "<None>", "Number of cache misses. UC reads count as misses."},
       {"TCC_EA_WRREQ",
@@ -137,12 +152,19 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
        "SQ",
        "4",
        "<None>",
-       "Count number of waves sent to SQs. (per-simd, emulated, global)"},
+       "Count number of waves sent to distributed sequencers (SQs). This value represents the "
+       "number of waves that are sent to each SQ. This only counts new waves sent since the start "
+       "of collection (for dispatch profiling this is the timeframe of kernel execution, for agent "
+       "profiling it is the timeframe between start_context and read counter data). A sum of all "
+       "SQ_WAVES values will give the total number of waves started by the application during the "
+       "collection timeframe. Returns one value per-SE (aggregates of SIMD values)."},
       {"SQ_INSTS_VALU",
        "SQ",
        "26",
        "<None>",
-       "Number of VALU instructions issued. (per-simd, emulated)"},
+       "The number of VALU (Vector ALU) instructions issued. The value is returned per-SE "
+       "(aggregate of values in SIMDs in the SE). See AMD ISAs for more information on VALU "
+       "instructions."},
       {"TA_TA_BUSY",
        "TA",
        "15",
@@ -166,47 +188,51 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
 
 static const std::unordered_map<std::string, std::vector<std::vector<std::string>>> derived_gfx908 =
     {{"gfx908",
-      {{"GPUBusy",
+      {{"MAX_WAVE_SIZE", "", "", "wave_front_size", "Max wave size constant"},
+       {"SE_NUM", "", "", "array_count/simd_arrays_per_engine", "SE_NUM"},
+       {"SIMD_NUM", "", "", "simd_count", "SIMD Number"},
+       {"CU_NUM", "", "", "simd_count/simd_per_cu", "CU_NUM"},
+       {"GPUBusy",
         "",
         "",
-        "100*GRBM_GUI_ACTIVE/GRBM_COUNT",
+        "100*reduce(GRBM_GUI_ACTIVE,max)/reduce(GRBM_COUNT,max)",
         "The percentage of time GPU was busy."},
-       {"Wavefronts", "", "", "SQ_WAVES", "Total wavefronts."},
+       {"Wavefronts", "", "", "reduce(SQ_WAVES,sum)", "Total wavefronts."},
        {"VALUInsts",
         "",
         "",
-        "SQ_INSTS_VALU/SQ_WAVES",
+        "reduce(SQ_INSTS_VALU,sum)/reduce(SQ_WAVES,sum)",
         "The average number of vector ALU instructions executed per work-item (affected by flow "
         "control)."},
        {"SALUInsts",
         "",
         "",
-        "SQ_INSTS_SALU/SQ_WAVES",
+        "reduce(SQ_INSTS_SALU,sum)/reduce(SQ_WAVES,sum)",
         "The average number of scalar ALU instructions executed per work-item (affected by flow "
         "control)."},
        {"SFetchInsts",
         "",
         "",
-        "SQ_INSTS_SMEM/SQ_WAVES",
+        "reduce(SQ_INSTS_SMEM,sum)/reduce(SQ_WAVES,sum)",
         "The average number of scalar fetch instructions from the video memory executed per "
         "work-item (affected by flow control)."},
        {"GDSInsts",
         "",
         "",
-        "SQ_INSTS_GDS/SQ_WAVES",
+        "reduce(SQ_INSTS_GDS,sum)/reduce(SQ_WAVES,sum)",
         "The average number of GDS read or GDS write instructions executed per work item "
         "(affected by flow control)."},
        {"MemUnitBusy",
         "",
         "",
-        "100*reduce(TA_TA_BUSY,max)/GRBM_GUI_ACTIVE/SE_NUM",
+        "100*reduce(TA_TA_BUSY,max)/reduce(GRBM_GUI_ACTIVE,max)",
         "The percentage of GPUTime the memory unit is active. The result includes the stall "
         "time (MemUnitStalled). This is measured with all extra fetches and writes and any "
         "cache or memory effects taken into account. Value range: 0% to 100% (fetch-bound)."},
        {"ALUStalledByLDS",
         "",
         "",
-        "400*SQ_WAIT_INST_LDS/SQ_WAVES/GRBM_GUI_ACTIVE",
+        "400*reduce(SQ_WAIT_INST_LDS,sum)/reduce(SQ_WAVES,sum)/reduce(GRBM_GUI_ACTIVE,max)",
         "The percentage of GPUTime ALU units are stalled by the LDS input queue being full or "
         "the output queue being not ready. If there are LDS bank conflicts, reduce them. "
         "Otherwise, try reducing the number of LDS accesses if possible. Value range: 0% "
@@ -214,14 +240,16 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
        {"GPU_UTIL",
         "",
         "",
-        "100*GRBM_GUI_ACTIVE/GRBM_COUNT",
+        "100*reduce(GRBM_GUI_ACTIVE,max)/reduce(GRBM_COUNT,max)",
         "Percentage of the time that GUI is active"},
        {"SQ_WAVES_sum",
         "",
         "",
         "reduce(SQ_WAVES,sum)",
-        "Count number of waves sent to SQs. (per-simd, emulated, global). Sum over SQ "
-        "instances."},
+        "Gives the total number of waves currently enqueued by the application during the "
+        "collection timeframe (for dispatch profiling this is the timeframe of kernel execution, "
+        "for agent profiling it is the timeframe between start_context and read counter data). See "
+        "SQ_WAVES for more details."},
        {"TCC_HIT_sum",
         "",
         "",
@@ -231,7 +259,7 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
         "",
         "",
         "reduce(TCC_MISS,sum)",
-        "Number of cache misses. Sum over TCC instances."},
+        "Number of cache misses. UC reads count as misses. Sum over TCC instances."},
        {"TCC_EA_RDREQ_32B_sum",
         "",
         "",
@@ -259,11 +287,6 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
         "",
         "reduce(TCC_EA_WRREQ_STALL,max)",
         "Number of cycles a write request was stalled. Max over TCC instances."},
-       {"CU_UTILIZATION",
-        "",
-        "",
-        "GRBM_GUI_ACTIVE/GRBM_COUNT",
-        "The total number of active cycles divided by total number of elapsed cycles"},
        {"TA_BUSY_avr",
         "",
         "",
@@ -319,54 +342,54 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
        {"VFetchInsts",
         "",
         "",
-        "(SQ_INSTS_VMEM_RD-TA_FLAT_READ_WAVEFRONTS_sum)/SQ_WAVES",
+        "(reduce(SQ_INSTS_VMEM_RD,sum)-TA_FLAT_READ_WAVEFRONTS_sum)/reduce(SQ_WAVES,sum)",
         "The average number of vector fetch instructions from the video memory executed per "
         "work-item (affected by flow control). Excludes FLAT instructions that fetch from video "
         "memory."},
        {"VWriteInsts",
         "",
         "",
-        "(SQ_INSTS_VMEM_WR-TA_FLAT_WRITE_WAVEFRONTS_sum)/SQ_WAVES",
+        "(reduce(SQ_INSTS_VMEM_WR,sum)-TA_FLAT_WRITE_WAVEFRONTS_sum)/reduce(SQ_WAVES,sum)",
         "The average number of vector write instructions to the video memory executed per "
         "work-item (affected by flow control). Excludes FLAT instructions that write to video "
         "memory."},
        {"FlatVMemInsts",
         "",
         "",
-        "(SQ_INSTS_FLAT-SQ_INSTS_FLAT_LDS_ONLY)/SQ_WAVES",
+        "(reduce(SQ_INSTS_FLAT,sum)-reduce(SQ_INSTS_FLAT_LDS_ONLY,sum))/reduce(SQ_WAVES,sum)",
         "The average number of FLAT instructions that read from or write to the video memory "
         "executed per work item (affected by flow control). Includes FLAT instructions that "
         "read from or write to scratch."},
        {"LDSInsts",
         "",
         "",
-        "(SQ_INSTS_LDS-SQ_INSTS_FLAT_LDS_ONLY)/SQ_WAVES",
+        "(reduce(SQ_INSTS_LDS,sum)-reduce(SQ_INSTS_FLAT_LDS_ONLY,sum))/reduce(SQ_WAVES,sum)",
         "The average number of LDS read or LDS write instructions executed per work item "
         "(affected by flow control).  Excludes FLAT instructions that read from or write to "
         "LDS."},
        {"FlatLDSInsts",
         "",
         "",
-        "SQ_INSTS_FLAT_LDS_ONLY/SQ_WAVES",
+        "reduce(SQ_INSTS_FLAT_LDS_ONLY,sum)/reduce(SQ_WAVES,sum)",
         "The average number of FLAT instructions that read or write to LDS executed per work "
         "item (affected by flow control)."},
        {"VALUUtilization",
         "",
         "",
-        "100*SQ_THREAD_CYCLES_VALU/(SQ_ACTIVE_INST_VALU*MAX_WAVE_SIZE)",
+        "100*reduce(SQ_THREAD_CYCLES_VALU,sum)/(reduce(SQ_ACTIVE_INST_VALU,sum)*MAX_WAVE_SIZE)",
         "The percentage of active vector ALU threads in a wave. A lower number can mean either "
         "more thread divergence in a wave or that the work-group size is not a multiple of 64. "
         "Value range: 0\% (bad), 100\% (ideal - no thread divergence)."},
        {"VALUBusy",
         "",
         "",
-        "100*SQ_ACTIVE_INST_VALU*4/SIMD_NUM/GRBM_GUI_ACTIVE",
+        "100*reduce(SQ_ACTIVE_INST_VALU,sum)/CU_NUM/reduce(GRBM_GUI_ACTIVE,max)",
         "The percentage of GPUTime vector ALU instructions are processed. Value range: 0\% "
         "(bad) to 100\% (optimal)."},
        {"SALUBusy",
         "",
         "",
-        "100*SQ_INST_CYCLES_SALU*4/SIMD_NUM/GRBM_GUI_ACTIVE",
+        "100*reduce(SQ_INST_CYCLES_SALU,sum)/CU_NUM/reduce(GRBM_GUI_ACTIVE,max)",
         "The percentage of GPUTime scalar ALU instructions are processed. Value range: 0% (bad) "
         "to 100% (optimal)."},
        {"FetchSize",
@@ -395,17 +418,17 @@ static const std::unordered_map<std::string, std::vector<std::vector<std::string
        {"MemUnitStalled",
         "",
         "",
-        "100*TCP_TCP_TA_DATA_STALL_CYCLES_max/GRBM_GUI_ACTIVE/SE_NUM",
+        "100*TCP_TCP_TA_DATA_STALL_CYCLES_max/reduce(GRBM_GUI_ACTIVE,max)/SE_NUM",
         "The percentage of GPUTime the memory unit is stalled. Try reducing the number or size "
         "of fetches and writes if possible. Value range: 0\% (optimal) to 100\% (bad)."},
        {"WriteUnitStalled",
         "",
         "",
-        "100*TCC_WRREQ_STALL_max/GRBM_GUI_ACTIVE",
+        "100*TCC_WRREQ_STALL_max/reduce(GRBM_GUI_ACTIVE,max)",
         "The percentage of GPUTime the Write unit is stalled. Value range: 0\% to 100\% (bad)."},
        {"LDSBankConflict",
         "",
         "",
-        "100*SQ_LDS_BANK_CONFLICT/GRBM_GUI_ACTIVE/CU_NUM",
+        "100*reduce(SQ_LDS_BANK_CONFLICT,sum)/reduce(GRBM_GUI_ACTIVE,max)/CU_NUM",
         "The percentage of GPUTime LDS is stalled by bank conflicts. Value range: 0\% (optimal) "
         "to 100\% (bad)."}}}};

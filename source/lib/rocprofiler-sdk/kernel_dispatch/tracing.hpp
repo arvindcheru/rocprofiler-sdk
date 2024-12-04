@@ -22,18 +22,35 @@
 
 #pragma once
 
-#include "lib/rocprofiler-sdk/context/context.hpp"
 #include "lib/rocprofiler-sdk/hsa/queue_info_session.hpp"
+#include "lib/rocprofiler-sdk/tracing/profiling_time.hpp"
+
+#include <rocprofiler-sdk/fwd.h>
+#include <rocprofiler-sdk/hsa.h>
+
+#include <hsa/hsa.h>
+
+#include <cstdint>
 
 namespace rocprofiler
 {
+namespace context
+{
+struct context;
+}
+
 namespace kernel_dispatch
 {
 using context_t              = context::context;
 using user_data_map_t        = std::unordered_map<const context_t*, rocprofiler_user_data_t>;
 using external_corr_id_map_t = user_data_map_t;
 
+using profiling_time = tracing::profiling_time;
+
+profiling_time
+get_dispatch_time(const hsa::queue_info_session& session);
+
 void
-dispatch_complete(hsa::queue_info_session&);
+dispatch_complete(hsa::queue_info_session&, profiling_time);
 }  // namespace kernel_dispatch
 }  // namespace rocprofiler

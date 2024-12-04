@@ -28,6 +28,7 @@
 #include "lib/rocprofiler-sdk/registration.hpp"
 
 #include <rocprofiler-sdk/fwd.h>
+#include <memory>
 
 namespace rocprofiler
 {
@@ -62,8 +63,9 @@ create_queue(hsa_agent_t        agent,
                                                      controller->get_ext_table(),
                                                      queue);
 
-            controller->serializer().wlock(
-                [&](auto& serializer) { serializer.add_queue(queue, *new_queue); });
+            controller->serializer(new_queue.get()).wlock([&](auto& serializer) {
+                serializer.add_queue(queue, *new_queue);
+            });
             controller->add_queue(*queue, std::move(new_queue));
 
             return HSA_STATUS_SUCCESS;
@@ -147,8 +149,8 @@ QueueController::add_queue(hsa_queue_t* id, std::unique_ptr<Queue> queue)
 {
     for(const auto& itr : context::get_registered_contexts())
     {
-        if(itr->thread_trace)
-            itr->thread_trace->resource_init(queue->get_agent(), get_core_table(), get_ext_table());
+        if(auto* trace = itr->dispatch_thread_trace.get())
+            trace->resource_init(queue->get_agent(), get_core_table(), get_ext_table());
     }
 
     CHECK(queue);
@@ -175,11 +177,11 @@ QueueController::destroy_queue(hsa_queue_t* id)
 
     for(const auto& itr : context::get_registered_contexts())
     {
-        if(!itr->thread_trace) continue;
+        if(!itr->dispatch_thread_trace) continue;
 
         _queues.wlock([&](auto& map) {
             if(map.find(id) != map.end())
-                itr->thread_trace->resource_deinit(map.at(id)->get_agent());
+                itr->dispatch_thread_trace->resource_deinit(map.at(id)->get_agent());
         });
     }
 
@@ -255,8 +257,18 @@ QueueController::init(CoreApiTable& core_table, AmdExtTable& ext_table)
     for(const auto* itr : agents)
     {
         const auto* cached_agent = agent::get_agent_cache(itr);
+        ROCP_TRACE << fmt::format(
+            "RocP Agent {:x} has Cache Agent? {}", itr->id.handle, cached_agent ? "yes" : "no");
+        if(cached_agent)
+        {
+            ROCP_TRACE << fmt::format("RocP Agent {:x} Type {}",
+                                      itr->id.handle,
+                                      (int) cached_agent->get_rocp_agent()->type);
+        }
+
         if(cached_agent && cached_agent->get_rocp_agent()->type == ROCPROFILER_AGENT_TYPE_GPU)
         {
+            ROCP_TRACE << fmt::format("RocP Agent {:x} is added to cache", itr->id.handle);
             get_supported_agents().emplace(cached_agent->index(), *cached_agent);
         }
     }
@@ -264,20 +276,21 @@ QueueController::init(CoreApiTable& core_table, AmdExtTable& ext_table)
     auto enable_intercepter = false;
     for(const auto& itr : context::get_registered_contexts())
     {
-        constexpr auto expected_context_size = 208UL;
+        constexpr auto expected_context_size = 216UL;
         static_assert(
             sizeof(context::context) == expected_context_size,
             "If you added a new field to context struct, make sure there is a check here if it "
             "requires queue interception. Once you have done so, increment expected_context_size");
 
-        bool has_kernel_tracing =
-            (itr->callback_tracer &&
-             itr->callback_tracer->domains(ROCPROFILER_CALLBACK_TRACING_KERNEL_DISPATCH)) ||
-            (itr->buffered_tracer &&
-             itr->buffered_tracer->domains(ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH));
+        bool has_kernel_tracing = itr->is_tracing(ROCPROFILER_CALLBACK_TRACING_KERNEL_DISPATCH) ||
+                                  itr->is_tracing(ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH);
+
+        bool has_scratch_reporting = itr->is_tracing(ROCPROFILER_CALLBACK_TRACING_SCRATCH_MEMORY) ||
+                                     itr->is_tracing(ROCPROFILER_BUFFER_TRACING_SCRATCH_MEMORY);
 
         if(itr->counter_collection || itr->pc_sampler || has_kernel_tracing ||
-           itr->agent_counter_collection || itr->thread_trace)
+           has_scratch_reporting || itr->device_counter_collection || itr->agent_thread_trace ||
+           itr->dispatch_thread_trace)
         {
             enable_intercepter = true;
             break;
@@ -305,23 +318,88 @@ QueueController::get_queue(const hsa_queue_t& _hsa_queue) const
         _hsa_queue);
 }
 
+common::Synchronized<hsa::profiler_serializer>&
+QueueController::serializer(const Queue* queue)
+{
+    CHECK(queue);
+    common::Synchronized<hsa::profiler_serializer>* ret = nullptr;
+    _profiler_serializer.ulock(
+        [&](const auto& m) {
+            if(auto ptr = m.find(queue->get_agent().get_rocp_agent()->id); ptr != m.end())
+            {
+                ret = ptr->second.get();
+                return true;
+            }
+            return false;
+        },
+        [&](auto& m) {
+            ret = m.emplace(queue->get_agent().get_rocp_agent()->id,
+                            std::make_shared<common::Synchronized<hsa::profiler_serializer>>())
+                      .first->second.get();
+            if(_serialized_enabled.load() == true)
+            {
+                ret->wlock([&](auto& serializer) { serializer.enable({}); });
+            }
+            return true;
+        });
+    return *ret;
+}
+
+namespace
+{
+std::unordered_map<rocprofiler_agent_id_t, hsa_barrier::queue_map_ptr_t>
+per_dev_map(const QueueController::queue_map_t& _queues_v)
+{
+    std::unordered_map<rocprofiler_agent_id_t, hsa_barrier::queue_map_ptr_t> dmap;
+    for(const auto& [k, v] : _queues_v)
+    {
+        dmap[v->get_agent().get_rocp_agent()->id][k] = v.get();
+    }
+    return dmap;
+}
+};  // namespace
+
 void
 QueueController::disable_serialization()
 {
-    _queues.rlock([](const queue_map_t& _queues_v) {
-        if(get_queue_controller())
-            get_queue_controller()->serializer().wlock(
-                [&](auto& serializer) { serializer.disable(_queues_v); });
+    _queues.rlock([&](const queue_map_t& _queues_v) {
+        _serialized_enabled.store(false);
+        auto pd_map = per_dev_map(_queues_v);
+        _profiler_serializer.wlock([&](auto& m) {
+            for(auto& [k, v] : m)
+            {
+                if(auto it = pd_map.find(k); it != pd_map.end())
+                {
+                    v->wlock([&](auto& serializer) { serializer.disable(it->second); });
+                }
+                else
+                {
+                    v->wlock([&](auto& serializer) { serializer.disable({}); });
+                }
+            }
+        });
     });
 }
 
 void
 QueueController::enable_serialization()
 {
-    _queues.rlock([](const queue_map_t& _queues_v) {
-        if(get_queue_controller())
-            get_queue_controller()->serializer().wlock(
-                [&](auto& serializer) { serializer.enable(_queues_v); });
+    _queues.rlock([&](const queue_map_t& _queues_v) {
+        _serialized_enabled.store(true);
+        auto pd_map = per_dev_map(_queues_v);
+        _profiler_serializer.wlock([&](auto& m) {
+            for(auto& [k, v] : m)
+            {
+                if(auto it = pd_map.find(k); it != pd_map.end())
+                {
+                    v->wlock([&](auto& serializer) { serializer.enable(it->second); });
+                }
+                else
+                {
+                    v->wlock([&](auto& serializer) { serializer.enable({}); });
+                }
+            }
+        });
     });
 }
 
@@ -375,6 +453,18 @@ QueueController::iterate_callbacks(const callback_iterator_cb_t& cb) const
             cb(cid, tuple);
         }
     });
+}
+
+const QueueController::agent_cache_map_t&
+QueueController::get_supported_agents() const
+{
+    return _supported_agents;
+}
+
+QueueController::agent_cache_map_t&
+QueueController::get_supported_agents()
+{
+    return _supported_agents;
 }
 
 QueueController*

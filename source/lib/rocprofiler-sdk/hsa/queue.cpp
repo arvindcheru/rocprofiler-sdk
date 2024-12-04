@@ -28,6 +28,7 @@
 #include "lib/rocprofiler-sdk/hsa/details/fmt.hpp"
 #include "lib/rocprofiler-sdk/hsa/hsa.hpp"
 #include "lib/rocprofiler-sdk/hsa/queue_controller.hpp"
+#include "lib/rocprofiler-sdk/kernel_dispatch/profiling_time.hpp"
 #include "lib/rocprofiler-sdk/kernel_dispatch/tracing.hpp"
 #include "lib/rocprofiler-sdk/pc_sampling/hsa_adapter.hpp"
 #include "lib/rocprofiler-sdk/pc_sampling/service.hpp"
@@ -76,6 +77,14 @@ namespace hsa
 {
 namespace
 {
+std::atomic<int64_t>&
+get_balanced_signal_slots()
+{
+    constexpr int64_t NUM_SIGNALS = 16;
+    static auto*&     atomic = common::static_object<std::atomic<int64_t>>::construct(NUM_SIGNALS);
+    return *atomic;
+}
+
 template <typename DomainT, typename... Args>
 inline bool
 context_filter(const context::context* ctx, DomainT domain, Args... args)
@@ -115,9 +124,12 @@ AsyncSignalHandler(hsa_signal_value_t /*signal_v*/, void* data)
         return false;
     }
 
-    auto& queue_info_session = *static_cast<Queue::queue_info_session_t*>(data);
+    get_balanced_signal_slots().fetch_add(1);
 
-    kernel_dispatch::dispatch_complete(queue_info_session);
+    auto& queue_info_session = *static_cast<Queue::queue_info_session_t*>(data);
+    auto  dispatch_time      = kernel_dispatch::get_dispatch_time(queue_info_session);
+
+    kernel_dispatch::dispatch_complete(queue_info_session, dispatch_time);
 
     // Calls our internal callbacks to callers who need to be notified post
     // kernel execution.
@@ -127,7 +139,8 @@ AsyncSignalHandler(hsa_signal_value_t /*signal_v*/, void* data)
             cb_pair.second(queue_info_session.queue,
                            queue_info_session.kernel_pkt,
                            queue_info_session,
-                           queue_info_session.inst_pkt);
+                           queue_info_session.inst_pkt,
+                           dispatch_time);
         }
     });
 
@@ -349,6 +362,13 @@ WriteInterceptor(const void* packets,
             thr_id,
             ROCPROFILER_EXTERNAL_CORRELATION_REQUEST_KERNEL_DISPATCH);
 
+        // If there is a lot of contention for HSA signals, then schedule out the thread
+        if(get_balanced_signal_slots().fetch_sub(1) <= 0)
+        {
+            sched_yield();
+            std::this_thread::sleep_for(std::chrono::microseconds(1));
+        }
+
         // Stores the instrumentation pkt (i.e. AQL packets for counter collection)
         // along with an ID of the client we got the packet from (this will be returned via
         // completed_cb_t)
@@ -381,12 +401,6 @@ WriteInterceptor(const void* packets,
             }
         }
 
-        // Barrier packet is last packet inserted into queue
-        if(inserted_before)
-        {
-            CreateBarrierPacket(nullptr, nullptr, transformed_packets);
-        }
-
 #if ROCPROFILER_SDK_HSA_PC_SAMPLING > 0
         if(pc_sampling::is_pc_sample_service_configured(queue.get_agent().get_rocp_agent()->id))
         {
@@ -397,6 +411,9 @@ WriteInterceptor(const void* packets,
 
         // emplace the kernel packet
         transformed_packets.emplace_back(kernel_pkt);
+        // If a profiling packet was inserted, wait for completion before executing the dispatch
+        if(inserted_before)
+            transformed_packets.back().kernel_dispatch.header |= 1 << HSA_PACKET_HEADER_BARRIER;
 
         // if the original completion signal exists, trigger it via a barrier packet
         if(existing_completion_signal)

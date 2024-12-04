@@ -56,7 +56,7 @@ struct callback_data
 {
     rocprofiler_client_id_t*      client_id             = nullptr;
     rocprofiler_client_finalize_t client_fini_func      = nullptr;
-    rocprofiler_context_id_t      client_ctx            = {};
+    rocprofiler_context_id_t      client_ctx            = {0};
     rocprofiler_buffer_id_t       client_buffer         = {};
     rocprofiler_callback_thread_t client_thread         = {};
     uint64_t                      client_workflow_count = {};
@@ -73,7 +73,7 @@ struct callback_data_ext
 
     rocprofiler_client_id_t*      client_id             = nullptr;
     rocprofiler_client_finalize_t client_fini_func      = nullptr;
-    rocprofiler_context_id_t      client_hsa_ctx        = {};
+    rocprofiler_context_id_t      client_hsa_ctx        = {0};
     rocprofiler_context_id_t      client_hip_ctx        = {};
     rocprofiler_buffer_id_t       client_buffer         = {};
     rocprofiler_callback_thread_t client_thread         = {};
@@ -120,21 +120,22 @@ get_callback_tracing_names()
     //
     // callback for each kind operation
     //
-    static auto tracing_kind_operation_cb =
-        [](rocprofiler_callback_tracing_kind_t kindv, uint32_t operation, void* data_v) {
-            auto* name_info_v = static_cast<callback_name_info*>(data_v);
+    static auto tracing_kind_operation_cb = [](rocprofiler_callback_tracing_kind_t kindv,
+                                               rocprofiler_tracing_operation_t     operation,
+                                               void*                               data_v) {
+        auto* name_info_v = static_cast<callback_name_info*>(data_v);
 
-            if(supported_kinds.count(kindv) > 0)
-            {
-                const char* name = nullptr;
-                ROCPROFILER_CALL(rocprofiler_query_callback_tracing_kind_operation_name(
-                                     kindv, operation, &name, nullptr),
-                                 "query callback tracing kind operation name");
-                EXPECT_TRUE(name != nullptr) << "kind=" << kindv << ", operation=" << operation;
-                if(name) name_info_v->operation_names[kindv][operation] = name;
-            }
-            return 0;
-        };
+        if(supported_kinds.count(kindv) > 0)
+        {
+            const char* name = nullptr;
+            ROCPROFILER_CALL(rocprofiler_query_callback_tracing_kind_operation_name(
+                                 kindv, operation, &name, nullptr),
+                             "query callback tracing kind operation name");
+            EXPECT_TRUE(name != nullptr) << "kind=" << kindv << ", operation=" << operation;
+            if(name) name_info_v->operation_names[kindv][operation] = name;
+        }
+        return 0;
+    };
 
     //
     //  callback for each callback kind (i.e. domain)
@@ -194,21 +195,22 @@ get_buffer_tracing_names()
     //
     // callback for each kind operation
     //
-    static auto tracing_kind_operation_cb =
-        [](rocprofiler_buffer_tracing_kind_t kindv, uint32_t operation, void* data_v) {
-            auto* name_info_v = static_cast<buffer_name_info*>(data_v);
+    static auto tracing_kind_operation_cb = [](rocprofiler_buffer_tracing_kind_t kindv,
+                                               rocprofiler_tracing_operation_t   operation,
+                                               void*                             data_v) {
+        auto* name_info_v = static_cast<buffer_name_info*>(data_v);
 
-            if(supported_kinds.count(kindv) > 0)
-            {
-                const char* name = nullptr;
-                ROCPROFILER_CALL(rocprofiler_query_buffer_tracing_kind_operation_name(
-                                     kindv, operation, &name, nullptr),
-                                 "query buffer tracing kind operation name");
-                EXPECT_TRUE(name != nullptr) << "kind=" << kindv << ", operation=" << operation;
-                if(name) name_info_v->operation_names[kindv][operation] = name;
-            }
-            return 0;
-        };
+        if(supported_kinds.count(kindv) > 0)
+        {
+            const char* name = nullptr;
+            ROCPROFILER_CALL(rocprofiler_query_buffer_tracing_kind_operation_name(
+                                 kindv, operation, &name, nullptr),
+                             "query buffer tracing kind operation name");
+            EXPECT_TRUE(name != nullptr) << "kind=" << kindv << ", operation=" << operation;
+            if(name) name_info_v->operation_names[kindv][operation] = name;
+        }
+        return 0;
+    };
 
     //
     //  callback for each buffer kind (i.e. domain)

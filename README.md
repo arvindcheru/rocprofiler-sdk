@@ -17,7 +17,7 @@ ROCProfiler-SDK is AMD’s new and improved tooling infrastructure, providing a 
 - HIP kernel tracing
 - HSA API tracing
 - HSA operation tracing
-- Marker(ROCtx) tracing
+- Marker(ROCTx) tracing
 - PC Sampling (Beta)
 
 ## Tool Support
@@ -45,7 +45,6 @@ cmake                                         \
       -B rocprofiler-sdk-build                \
       -D ROCPROFILER_BUILD_TESTS=ON           \
       -D ROCPROFILER_BUILD_SAMPLES=ON         \
-      -D ROCPROFILER_BUILD_DOCS=ON            \
       -D CMAKE_INSTALL_PREFIX=/opt/rocm       \
        rocprofiler-sdk-source
 
@@ -69,9 +68,9 @@ Please report in the Github Issues.
 - Individual XCC mode is not supported.
 
 - By default, PC sampling API is disabled. To use PC sampling. Setting the `ROCPROFILER_PC_SAMPLING_BETA_ENABLED` environment variable grants access to the PC Sampling experimental beta feature. This feature is still under development and may not be completely stable.
-    - **Risk Acknowledgment**: By activating this environment variable, you acknowledge and accept the following potential risks:
-       - **Hardware Freeze**: This beta feature could cause your hardware to freeze unexpectedly.
-       - **Need for Cold Restart**: In the event of a hardware freeze, you may need to perform a cold restart (turning the hardware off and on) to restore normal operations.
+  - **Risk Acknowledgment**: By activating this environment variable, you acknowledge and accept the following potential risks:
+    - **Hardware Freeze**: This beta feature could cause your hardware to freeze unexpectedly.
+    - **Need for Cold Restart**: In the event of a hardware freeze, you may need to perform a cold restart (turning the hardware off and on) to restore normal operations.
     Please use this beta feature cautiously. It may affect your system's stability and performance. Proceed at your own risk.
 
 - At this point, We do not recommend stress-testing the beta implementation.

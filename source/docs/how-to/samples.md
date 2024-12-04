@@ -1,4 +1,11 @@
-# Samples
+---
+myst:
+    html_meta:
+        "description": "ROCprofiler-SDK is a tooling infrastructure for profiling general-purpose GPU compute applications running on the ROCm software."
+        "keywords": "ROCprofiler-SDK, ROCProfiler-SDK samples"
+---
+
+# ROCprofiler-SDK samples
 
 The samples are provided to help you see the profiler in action.
 
@@ -11,6 +18,7 @@ The ROCm installation provides sample programs and `rocprofv3` tool.
     ```bash
     /opt/rocm/share/rocprofiler-sdk/samples
     ```
+
 - `rocprofv3` tool is installed here:
 
     ```bash

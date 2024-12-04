@@ -71,14 +71,9 @@
         {                                                                                          \
             std::string status_msg =                                                               \
                 rocprofiler_get_status_string(ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__));        \
-            std::cerr << "[" #result "][" << __FILE__ << ":" << __LINE__ << "] " << msg            \
-                      << " failed with error code " << ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) \
-                      << ": " << status_msg << "\n"                                                \
-                      << std::flush;                                                               \
-            std::stringstream errmsg{};                                                            \
-            errmsg << "[" #result "][" << __FILE__ << ":" << __LINE__ << "] " << msg " failure ("  \
-                   << status_msg << ")";                                                           \
-            throw std::runtime_error(errmsg.str());                                                \
+            ROCP_FATAL << " :: [" << __FILE__ << ":" << __LINE__ << "]\n\t" << #result << "\n\n"   \
+                       << msg << " failed with error code "                                        \
+                       << ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) << ": " << status_msg;       \
         }                                                                                          \
     }
 
@@ -271,8 +266,8 @@ struct rocprofiler_tool_record_counter_t
 
 struct rocprofiler_tool_counter_collection_record_t
 {
-    rocprofiler_profile_counting_dispatch_data_t       dispatch_data    = {};
-    std::array<rocprofiler_tool_record_counter_t, 256> records          = {};
+    rocprofiler_dispatch_counting_service_data_t       dispatch_data    = {};
+    std::array<rocprofiler_tool_record_counter_t, 512> records          = {};
     uint64_t                                           thread_id        = 0;
     uint64_t                                           arch_vgpr_count  = 0;
     uint64_t                                           sgpr_count       = 0;
@@ -324,6 +319,9 @@ using memory_copy_buffered_output_t =
 using marker_buffered_output_t =
     ::rocprofiler::tool::buffered_output<rocprofiler_buffer_tracing_marker_api_record_t,
                                          domain_type::MARKER>;
+using rccl_buffered_output_t =
+    ::rocprofiler::tool::buffered_output<rocprofiler_buffer_tracing_rccl_api_record_t,
+                                         domain_type::RCCL>;
 using counter_collection_buffered_output_t =
     ::rocprofiler::tool::buffered_output<rocprofiler_tool_counter_collection_record_t,
                                          domain_type::COUNTER_COLLECTION>;
@@ -333,7 +331,7 @@ using scratch_memory_buffered_output_t =
 
 using tool_get_agent_node_id_fn_t      = uint64_t (*)(rocprofiler_agent_id_t);
 using tool_get_app_timestamps_fn_t     = timestamps_t* (*) ();
-using tool_get_kernel_name_fn_t        = std::string_view (*)(uint64_t);
+using tool_get_kernel_name_fn_t        = std::string_view (*)(uint64_t, uint64_t);
 using tool_get_domain_name_fn_t        = std::string_view (*)(rocprofiler_buffer_tracing_kind_t);
 using tool_get_operation_name_fn_t     = std::string_view (*)(rocprofiler_buffer_tracing_kind_t,
                                                           rocprofiler_tracing_operation_t);

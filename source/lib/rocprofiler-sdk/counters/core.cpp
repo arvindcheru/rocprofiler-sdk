@@ -29,6 +29,7 @@
 #include "lib/rocprofiler-sdk/context/context.hpp"
 #include "lib/rocprofiler-sdk/counters/dispatch_handlers.hpp"
 #include "lib/rocprofiler-sdk/hsa/queue_controller.hpp"
+#include "lib/rocprofiler-sdk/kernel_dispatch/profiling_time.hpp"
 
 #include <rocprofiler-sdk/fwd.h>
 #include <rocprofiler-sdk/rocprofiler.h>
@@ -184,7 +185,10 @@ start_context(const context::context* ctx)
                 [=](const hsa::Queue&                       q,
                     hsa::rocprofiler_packet                 kern_pkt,
                     const hsa::Queue::queue_info_session_t& session,
-                    inst_pkt_t& aql) { completed_cb(ctx, cb, q, kern_pkt, session, aql); });
+                    inst_pkt_t&                             aql,
+                    kernel_dispatch::profiling_time         dispatch_time) {
+                    completed_cb(ctx, cb, q, kern_pkt, session, aql, dispatch_time);
+                });
         }
     }
 }
@@ -205,11 +209,11 @@ stop_context(const context::context* ctx)
 }
 
 rocprofiler_status_t
-configure_agent_collection(rocprofiler_context_id_t             context_id,
-                           rocprofiler_buffer_id_t              buffer_id,
-                           rocprofiler_agent_id_t               agent_id,
-                           rocprofiler_agent_profile_callback_t cb,
-                           void*                                user_data)
+configure_agent_collection(rocprofiler_context_id_t                       context_id,
+                           rocprofiler_buffer_id_t                        buffer_id,
+                           rocprofiler_agent_id_t                         agent_id,
+                           rocprofiler_device_counting_service_callback_t cb,
+                           void*                                          user_data)
 {
     return get_controller().configure_agent_collection(
         context_id, buffer_id, agent_id, cb, user_data);
@@ -218,7 +222,7 @@ configure_agent_collection(rocprofiler_context_id_t             context_id,
 rocprofiler_status_t
 configure_buffered_dispatch(rocprofiler_context_id_t                         context_id,
                             rocprofiler_buffer_id_t                          buffer,
-                            rocprofiler_profile_counting_dispatch_callback_t callback,
+                            rocprofiler_dispatch_counting_service_callback_t callback,
                             void*                                            callback_args)
 {
     CHECK_NE(buffer.handle, 0);
@@ -228,7 +232,7 @@ configure_buffered_dispatch(rocprofiler_context_id_t                         con
 
 rocprofiler_status_t
 configure_callback_dispatch(rocprofiler_context_id_t                         context_id,
-                            rocprofiler_profile_counting_dispatch_callback_t callback,
+                            rocprofiler_dispatch_counting_service_callback_t callback,
                             void*                                            callback_data_args,
                             rocprofiler_profile_counting_record_callback_t   record_callback,
                             void*                                            record_callback_args)

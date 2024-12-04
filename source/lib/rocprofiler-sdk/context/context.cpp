@@ -321,8 +321,9 @@ start_context(rocprofiler_context_id_t context_id)
     auto status = ROCPROFILER_STATUS_SUCCESS;
 
     if(cfg->counter_collection) rocprofiler::counters::start_context(cfg);
-    if(cfg->thread_trace) cfg->thread_trace->start_context();
-    if(cfg->agent_counter_collection) status = rocprofiler::counters::start_agent_ctx(cfg);
+    if(cfg->agent_thread_trace) cfg->agent_thread_trace->start_context();
+    if(cfg->dispatch_thread_trace) cfg->dispatch_thread_trace->start_context();
+    if(cfg->device_counter_collection) status = rocprofiler::counters::start_agent_ctx(cfg);
 #if ROCPROFILER_SDK_HSA_PC_SAMPLING > 0
     if(cfg->pc_sampler) status = rocprofiler::pc_sampling::start_service(cfg);
 #endif
@@ -355,9 +356,11 @@ stop_context(rocprofiler_context_id_t idx)
                     rocprofiler::counters::stop_context(const_cast<context*>(_expected));
                 }
 
-                if(_expected->thread_trace) _expected->thread_trace->stop_context();
+                if(_expected->agent_thread_trace) _expected->agent_thread_trace->stop_context();
+                if(_expected->dispatch_thread_trace)
+                    _expected->dispatch_thread_trace->stop_context();
 
-                if(_expected->agent_counter_collection)
+                if(_expected->device_counter_collection)
                 {
                     rocprofiler::counters::stop_agent_ctx(const_cast<context*>(_expected));
                 }
@@ -424,5 +427,25 @@ deregister_client_contexts(rocprofiler_client_id_t client_id)
         }
     }
 }
+
+template <typename KindT>
+bool
+context::is_tracing(KindT _kind) const
+{
+    constexpr auto is_callback_tracing =
+        std::is_same<KindT, rocprofiler_callback_tracing_kind_t>::value;
+    constexpr auto is_buffered_tracing =
+        std::is_same<KindT, rocprofiler_buffer_tracing_kind_t>::value;
+    static_assert(is_callback_tracing || is_buffered_tracing, "Unsupported domain type");
+
+    if constexpr(is_callback_tracing)
+        return (callback_tracer && callback_tracer->domains(_kind));
+    else if constexpr(is_buffered_tracing)
+        return (buffered_tracer && buffered_tracer->domains(_kind));
+}
+
+// explicitly instantiate
+template bool context::is_tracing(rocprofiler_callback_tracing_kind_t) const;
+template bool context::is_tracing(rocprofiler_buffer_tracing_kind_t) const;
 }  // namespace context
 }  // namespace rocprofiler
