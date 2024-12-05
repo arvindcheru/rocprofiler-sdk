@@ -169,7 +169,7 @@ To use ``rocprofv3`` for application tracing, run:
 
 .. code-block:: bash
 
-    rocprofv3 <tracing_option> -- <app_relative_path>
+    rocprofv3 <tracing_option> -- <application_path>
 
 HIP trace
 +++++++++++
@@ -180,7 +180,7 @@ To trace HIP runtime APIs, use:
 
 .. code-block:: bash
 
-    rocprofv3 --hip-trace -- < app_relative_path >
+    rocprofv3 --hip-trace -- <application_path>
 
 The above command generates a ``hip_api_trace.csv`` file prefixed with the process ID.
 
@@ -199,7 +199,7 @@ To trace HIP compile time APIs, use:
 
 .. code-block:: shell
 
-    rocprofv3 --hip-compiler-trace -- < app_relative_path >
+    rocprofv3 --hip-compiler-trace -- <application_path>
 
 The above command generates a ``hip_api_trace.csv`` file prefixed with the process ID.
 
@@ -225,7 +225,7 @@ HSA trace contains the start and end time of HSA runtime API calls and their asy
 
 .. code-block:: bash
 
-    rocprofv3 --hsa-trace -- < app_relative_path >
+    rocprofv3 --hsa-trace -- <application_path>
 
 The above command generates a ``hsa_api_trace.csv`` file prefixed with process ID. Note that the contents of this file have been truncated for demonstration purposes.
 
@@ -256,6 +256,14 @@ Here is a list of useful APIs for code instrumentation.
 - ``roctxRangePush``: Starts a new nested range.
 - ``roctxRangePop``: Stops the current nested range.
 - ``roctxRangeStop``: Stops the given range.
+- ``roctxProfilerPause``: Request any currently running profiling tool that it should stop collecting data.
+- ``roctxProfilerResume``: Request any currently running profiling tool that it should resume collecting data.
+- ``roctxGetThreadId``: Retrieve a id value for the current thread which will be identical to the id value a profiling tool gets via `rocprofiler_get_thread_id(rocprofiler_thread_id_t*)`.
+- ``roctxNameOsThread``: Current CPU OS thread to be labeled by the provided name in the output of the profiling tool.
+- ``roctxNameHsaAgent``: Given HSA agent to be labeled by the provided name in the output of the profiling tool.
+- ``roctxNameHipDevice``: Given HIP device id to be labeled by the provided name in the output of the profiling tool.
+- ``roctxNameHipStream``: Given HIP stream to be labeled by the provided name in the output of the profiling tool.
+
 
 .. note::
   To use ``rocprofv3`` for marker tracing, including and linking to old ROCTx works but it is recommended to switch to new ROCTx because
@@ -291,7 +299,7 @@ To trace the API calls enclosed within the range, use:
 
 .. code-block:: bash
 
-    rocprofv3 --marker-trace -- < app_relative_path >
+    rocprofv3 --marker-trace -- <application_path>
 
 Running the preceding command generates a ``marker_api_trace.csv`` file prefixed with the process ID.
 
@@ -308,6 +316,127 @@ Here are the contents of ``marker_api_trace.csv`` file:
 
 For the description of the fields in the output file, see :ref:`output-file-fields`.
 
+``roctxProfilerPause`` and ``roctxProfilerResume`` can be used to hide the calls between them. This is useful when you want to hide the calls that are not relevant to your profiling session.
+
+.. code-block:: bash
+
+    #include <rocprofiler-sdk-roctx/roctx.h>
+
+    // Memory transfer from host to device
+    HIP_API_CALL(hipMemcpy(gpuMatrix, Matrix, NUM * sizeof(float), hipMemcpyHostToDevice));
+
+    auto tid = roctx_thread_id_t{};
+    roctxGetThreadId(&tid);
+    roctxProfilerPause(tid);
+    // Memory transfer that should be hidden by profiling tool
+    HIP_API_CALL(
+        hipMemcpy(gpuTransposeMatrix, gpuMatrix, NUM * sizeof(float), hipMemcpyDeviceToDevice));
+    roctxProfilerResume(tid);
+
+    // Lauching kernel from host
+    hipLaunchKernelGGL(matrixTranspose,
+                       dim3(WIDTH / THREADS_PER_BLOCK_X, WIDTH / THREADS_PER_BLOCK_Y),
+                       dim3(THREADS_PER_BLOCK_X, THREADS_PER_BLOCK_Y),
+                       0,
+                       0,
+                       gpuTransposeMatrix,
+                       gpuMatrix,
+                       WIDTH);
+
+    // Memory transfer from device to host
+    HIP_API_CALL(
+        hipMemcpy(TransposeMatrix, gpuTransposeMatrix, NUM * sizeof(float), hipMemcpyDeviceToHost));
+
+.. code-block:: shell
+
+    rocprofv3 --marker-trace --hip-trace -- <application_path>
+
+    The above command generates a ``hip_api_trace.csv`` file prefixed with the process ID, which has only 2  `hipMemcpy` calls and the in between ``hipMemcpyDeviceToHost`` is hidden .
+
+.. code-block:: shell
+
+   "Domain","Function","Process_Id","Thread_Id","Correlation_Id","Start_Timestamp","End_Timestamp"
+   "HIP_COMPILER_API","__hipRegisterFatBinary",1643920,1643920,1,320301257609216,320301257636427
+   "HIP_COMPILER_API","__hipRegisterFunction",1643920,1643920,2,320301257650707,320301257678857
+   "HIP_RUNTIME_API","hipGetDevicePropertiesR0600",1643920,1643920,4,320301258114239,320301337764472
+   "HIP_RUNTIME_API","hipMalloc",1643920,1643920,5,320301338073823,320301338247374
+   "HIP_RUNTIME_API","hipMalloc",1643920,1643920,6,320301338248284,320301338399595
+   "HIP_RUNTIME_API","hipMemcpy",1643920,1643920,7,320301338410995,320301631549262
+   "HIP_COMPILER_API","__hipPushCallConfiguration",1643920,1643920,10,320301632131175,320301632134215
+   "HIP_COMPILER_API","__hipPopCallConfiguration",1643920,1643920,11,320301632137745,320301632139735
+   "HIP_RUNTIME_API","hipLaunchKernel",1643920,1643920,12,320301632142615,320301632898289
+   "HIP_RUNTIME_API","hipMemcpy",1643920,1643920,14,320301632901249,320301633934395
+   "HIP_RUNTIME_API","hipFree",1643920,1643920,15,320301643320908,320301643511479
+   "HIP_RUNTIME_API","hipFree",1643920,1643920,16,320301643512629,320301643585639
+
+Kernel Rename
+++++++++++++++
+
+To rename kernels with their enclosing roctxRangePush/roctxRangePop message. Known as --roctx-rename in earlier rocprof versions.
+
+See how to use ``--kernel-rename`` option with help of below code snippet:
+
+.. code-block:: bash
+
+    #include <rocprofiler-sdk-roctx/roctx.h>
+
+    roctxRangePush("HIP_Kernel-1");
+
+    // Launching kernel from host
+    hipLaunchKernelGGL(matrixTranspose, dim3(WIDTH/THREADS_PER_BLOCK_X, WIDTH/THREADS_PER_BLOCK_Y), dim3(THREADS_PER_BLOCK_X, THREADS_PER_BLOCK_Y), 0,0,gpuTransposeMatrix,gpuMatrix, WIDTH);
+
+    // Memory transfer from device to host
+    roctxRangePush("hipMemCpy-DeviceToHost");
+
+    hipMemcpy(TransposeMatrix, gpuTransposeMatrix, NUM * sizeof(float), hipMemcpyDeviceToHost);
+
+    roctxRangePop();  // for "hipMemcpy"
+    roctxRangePop();  // for "hipLaunchKernel"
+    roctxRangeStop(rangeId);
+
+To rename the kernel , use:
+
+.. code-block:: bash
+
+    rocprofv3 --marker-trace --kernel-rename -- <application_path>
+
+The above command generates a ``marker-trace`` file prefixed with the process ID.
+
+.. code-block:: shell
+
+    $ cat 210_marker_api_trace.csv
+   "Domain","Function","Process_Id","Thread_Id","Correlation_Id","Start_Timestamp","End_Timestamp"
+   "MARKER_CORE_API","roctxGetThreadId",315155,315155,2,58378843928406,58378843930247
+   "MARKER_CONTROL_API","roctxProfilerPause",315155,315155,3,58378844627184,58378844627502
+   "MARKER_CONTROL_API","roctxProfilerResume",315155,315155,4,58378844638601,58378844639267
+   "MARKER_CORE_API","pre-kernel-launch",315155,315155,5,58378844641787,58378844641787
+   "MARKER_CORE_API","post-kernel-launch",315155,315155,6,58378844936586,58378844936586
+   "MARKER_CORE_API","memCopyDth",315155,315155,7,58378844938371,58378851383270
+   "MARKER_CORE_API","HIP_Kernel-1",315155,315155,1,58378526575735,58378851384485
+
+
+Kokkos Trace
+++++++++++++++
+
+rocprofv3 has a built-in `Kokkos Tools library <https://github.com/kokkos/kokkos-tools>`_ support to trace Kokkos API calls. `Kokkos <https://github.com/kokkos/kokkos>`_ is a C++ library for writing performance portable applications. It is used in many scientific applications to write performance portable code that can run on CPUs, GPUs, and other accelerators.
+rocprofv3 loads a built-in Kokkos tools library which emits roctx ranges with the labels passed through the API, e.g. Kokkos::parallel_for(“MyParallelForLabel”, …); will internally calls for roctxRangePush and enables the kernel renaming option so that the highly templated kernel names are replaced by the Kokkos labels.
+To enable built-in marker support, use the ``kokkos-trace`` option. Internally this option enables ``marker-trace`` and ``kernel-rename``.:
+
+.. code-block:: bash
+
+    rocprofv3 --kokkos-trace -- <application_path>
+
+The above command generates a ``marker-trace`` file prefixed with the process ID.
+
+.. code-block:: shell
+
+    $ cat 210_marker_api_trace.csv
+   "Domain","Function","Process_Id","Thread_Id","Correlation_Id","Start_Timestamp","End_Timestamp"
+   "MARKER_CORE_API","Kokkos::Initialization Complete",4069256,4069256,1,56728499773965,56728499773965
+   "MARKER_CORE_API","Kokkos::Impl::CombinedFunctorReducer<CountFunctor, Kokkos::Impl::FunctorAnalysis<Kokkos::Impl::FunctorPatternInterface::REDUCE, Kokkos::RangePolicy<Kokkos::Serial>, CountFunctor, long int>::Reducer, void>",4069256,4069256,2,56728501756088,56728501764241
+   "MARKER_CORE_API","Kokkos::parallel_reduce: fence due to result being value, not view",4069256,4069256,4,56728501767957,56728501769600
+   "MARKER_CORE_API","Kokkos::Finalization Complete",4069256,4069256,6,56728502054554,56728502054554
+
 Kernel trace
 ++++++++++++++
 
@@ -315,7 +444,7 @@ To trace kernel dispatch traces, use:
 
 .. code-block:: shell
 
-    rocprofv3 --kernel-trace -- < app_relative_path >
+    rocprofv3 --kernel-trace -- <application_path>
 
 The above command generates a ``kernel_trace.csv`` file prefixed with the process ID.
 
@@ -339,7 +468,7 @@ To trace memory moves across the application, use:
 
 .. code-block:: shell
 
-    rocprofv3 –-memory-copy-trace -- < app_relative_path >
+    rocprofv3 –-memory-copy-trace -- <application_path>
 
 The above command generates a ``memory_copy_trace.csv`` file prefixed with the process ID.
 
@@ -372,7 +501,7 @@ memory operations (copies and scratch).
 
 .. code-block:: shell
 
-    rocprofv3 –-runtime-trace -- < app_relative_path >
+    rocprofv3 –-runtime-trace -- <application_path>
 
 Running the above command generates ``hip_api_trace.csv``, ``kernel_trace.csv``, ``memory_copy_trace.csv``, ``scratch_memory_trace.csv``,and ``marker_api_trace.csv`` (if ``ROCTx`` APIs are specified in the application) files prefixed with the process ID.
 
@@ -383,7 +512,7 @@ This is an all-inclusive option to collect all the above-mentioned traces.
 
 .. code-block:: shell
 
-    rocprofv3 –-sys-trace -- < app_relative_path >
+    rocprofv3 –-sys-trace -- <application_path>
 
 Running the above command generates ``hip_api_trace.csv``, ``hsa_api_trace.csv``, ``kernel_trace.csv``, ``memory_copy_trace.csv``, and ``marker_api_trace.csv`` (if ``ROCTx`` APIs are specified in the application) files prefixed with the process ID.
 
@@ -394,19 +523,45 @@ This option collects scratch memory operation's traces. Scratch is an address sp
 
 .. code-block:: shell
 
-    rocprofv3 --scratch-memory-trace -- < app_relative_path >
+    rocprofv3 --scratch-memory-trace -- <application_path>
 
-Stats
-++++++++
+
+RCCL trace
+++++++++++++
+
+`RCCL <https://github.com/ROCm/rccl>`_ (pronounced "Rickle") is a stand-alone library of standard collective communication routines for GPUs. This option traces those communication routines.
+
+.. code-block:: shell
+
+    rocprofv3 --rccl-trace -- <application_path>
+
+The above command generates a ``rccl_api_trace`` file prefixed with the process ID.
+
+.. code-block:: shell
+
+    $ cat 197_rccl_api_trace.csv
+
+Here are the contents of ``rccl_api_trace.csv`` file:
+
+.. csv-table:: RCCL trace
+   :file: /data/rccl_trace.csv
+   :widths: 10,10,10,10,10,20,20
+   :header-rows: 1
+
+Post-processing tracing options
+++++++++++++++++++++++++++++++++
+
+1. Stats
++++++++++
 
 This option collects statistics for the enabled tracing types. For example, to collect statistics of HIP APIs, when HIP trace is enabled.
 A higher percentage in statistics can help user focus on the API/function that has taken the most time:
 
 .. code-block:: shell
 
-    rocprofv3 --stats --hip-trace  -- < app_relative_path >
+    rocprofv3 --stats --hip-trace  -- <application_path>
 
-The above command generates a ``hip_api_stats.csv`` and ``hip_api_trace`` file prefixed with the process ID.
+The above command generates a ``hip_api_stats.csv``, ``domain_stats.csv`` and ``hip_api_trace.csv`` file prefixed with the process ID.
 
 .. code-block:: shell
 
@@ -419,7 +574,59 @@ Here are the contents of ``hip_api_stats.csv`` file:
    :widths: 10,10,20,20,10,10,10,10
    :header-rows: 1
 
+Here are the contents of ``domain_stats.csv`` file:
+
+.. csv-table:: Domain stats
+   :file: /data/hip_domain_stats.csv
+   :widths: 10,10,20,20,10,10,10,10
+   :header-rows: 1
+
 For the description of the fields in the output file, see :ref:`output-file-fields`.
+
+2. Summary
++++++++++++
+
+Output single summary of tracing data at the conclusion of the profiling session
+
+.. code-block:: shell
+   
+   rocprofv3 -S --hip-trace -- <application_path>
+
+.. image:: /data/rocprofv3_summary.png
+   
+ 
+2.1 Summary per domain
+++++++++++++++++++++++
+
+Outputs the summary of each tracing domain at the end of profiling session. 
+
+.. code-block:: shell
+
+    rocprofv3 -D --hsa-trace --hip-trace  -- <application_path>
+
+The above command generates a ``hip_trace.csv``, ``hsa_trace.csv`` file prefixed with the process ID along with the summary of each domain at the terminal.
+ 
+2.2 Summary groups
++++++++++++++++++++
+
+Users can create a summary of multiple domains by specifying the domain names in the command line. The summary groups are separated by a pipe (|) symbol.
+To create a summary for ``MEMORY_COPY`` domains, use:
+
+.. code-block:: shell
+
+   rocprofv3 --summary-groups MEMORY_COPY --sys-trace  -- <application_path>
+
+.. image:: /data/rocprofv3_memcpy_summary.png
+
+
+To create a summary for ``MEMORY_COPY`` and ``HIP_API`` domains, use:
+
+.. code-block:: shell
+   
+   rocprofv3 --summary-groups 'MEMORY_COPY|HIP_API' --sys-trace -- <application_path>
+
+.. image:: /data/rocprofv3_hip_memcpy_summary.png
+
 
 Kernel profiling
 -------------------
@@ -510,7 +717,7 @@ Properties
     {
         "jobs": [
         {
-            "pmc": ["SQ_WAVES", "GRBM_COUNT", "GUI_ACTIVE"]
+            "pmc": ["SQ_WAVES", "GRBM_COUNT", "GRBM_GUI_ACTIVE"]
         },
         {
             "pmc": ["FETCH_SIZE", "WRITE_SIZE"],
@@ -534,7 +741,7 @@ Properties
     - pmc:
         - SQ_WAVES
         - GRBM_COUNT
-        - GUI_ACTIVE
+        - GRBM_GUI_ACTIVE
         - 'TCC_HIT[1]'
         - 'TCC_HIT[2]'
     - pmc:
@@ -551,7 +758,7 @@ To supply the counters via ``command-line`` options, use:
 
 .. code-block:: shell
 
-   rocprofv3 --pmc SQ_WAVES GRBM_COUNT GRBM_GUI_ACTIVE -- <app_relative_path>
+   rocprofv3 --pmc SQ_WAVES GRBM_COUNT GRBM_GUI_ACTIVE -- <application_path>
 
 .. note::
    1. Please note that more than 1 counters should be separated by a space or a comma.
@@ -564,7 +771,7 @@ To supply the input file for kernel profiling, use:
 
 .. code-block:: shell
 
-    rocprofv3 -i input.txt -- <app_relative_path>
+    rocprofv3 -i input.txt -- <application_path>
 
 Running the above command generates a ``./pmc_n/counter_collection.csv`` file prefixed with the process ID. For each ``pmc`` row, a directory ``pmc_n`` containing a ``counter_collection.csv`` file is generated, where n = 1 for the first row and so on.
 
@@ -636,7 +843,7 @@ To collect counters for the kernels matching the filters specified in the preced
 
 .. code-block:: shell
 
-    rocprofv3 -i input.yml -- <app_relative_path>
+    rocprofv3 -i input.yml -- <application_path>
 
     $ cat pass_1/312_counter_collection.csv
     "Correlation_Id","Dispatch_Id","Agent_Id","Queue_Id","Process_Id","Thread_Id","Grid_Size","Kernel_Name","Workgroup_Size","LDS_Block_Size","Scratch_Size","VGPR_Count","SGPR_Count","Counter_Name","Counter_Value","Start_Timestamp","End_Timestamp"
